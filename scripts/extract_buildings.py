@@ -189,8 +189,8 @@ def main():
 
     if len(features) == 0:
         print("WARNING: 0 features extracted - check radius/logic for bugs.")
-    elif len(features) > 1000:
-        print("WARNING: >1000 features extracted - check radius/logic for bugs.")
+    elif len(features) > 5000:
+        print("WARNING: >5000 features extracted - check radius/logic for bugs.")
 
 
 if __name__ == "__main__":

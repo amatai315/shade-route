@@ -13,6 +13,59 @@ function sampleCountForEdge(distanceMeters: number): number {
   return Math.min(8, Math.max(2, Math.ceil(distanceMeters / 4)));
 }
 
+/** Grid cell size (meters) used to spatially index shadow polygons for fast point lookups. */
+const SHADOW_GRID_CELL_METERS = 100;
+const METERS_PER_DEGREE_LAT = 111320;
+
+/**
+ * Uniform grid spatial index over shadow polygons: each polygon is registered into every
+ * cell its bounding box overlaps, so a point-in-cell lookup only needs to test a small
+ * handful of nearby polygons instead of the whole set.
+ */
+interface ShadowGridIndex {
+  cellSizeDegLon: number;
+  cellSizeDegLat: number;
+  cells: Map<string, ShadowPolygon[]>;
+}
+
+function buildShadowGridIndex(shadows: ShadowPolygon[]): ShadowGridIndex {
+  // Use a representative latitude (first shadow's bbox) to convert the meter-based cell
+  // size into degrees-of-longitude, correcting for latitude distortion. Good enough for a
+  // grid whose only job is coarse candidate filtering (exact test happens afterwards).
+  const refLat = shadows.length > 0 ? turf.bbox(shadows[0].polygon)[1] : 35.68;
+  const metersPerDegLon = METERS_PER_DEGREE_LAT * Math.cos((refLat * Math.PI) / 180);
+  const cellSizeDegLat = SHADOW_GRID_CELL_METERS / METERS_PER_DEGREE_LAT;
+  const cellSizeDegLon = SHADOW_GRID_CELL_METERS / metersPerDegLon;
+
+  const cells = new Map<string, ShadowPolygon[]>();
+  for (const shadow of shadows) {
+    const [minX, minY, maxX, maxY] = turf.bbox(shadow.polygon);
+    const cx0 = Math.floor(minX / cellSizeDegLon);
+    const cx1 = Math.floor(maxX / cellSizeDegLon);
+    const cy0 = Math.floor(minY / cellSizeDegLat);
+    const cy1 = Math.floor(maxY / cellSizeDegLat);
+    for (let cx = cx0; cx <= cx1; cx++) {
+      for (let cy = cy0; cy <= cy1; cy++) {
+        const key = `${cx},${cy}`;
+        let list = cells.get(key);
+        if (!list) {
+          list = [];
+          cells.set(key, list);
+        }
+        list.push(shadow);
+      }
+    }
+  }
+
+  return { cellSizeDegLon, cellSizeDegLat, cells };
+}
+
+function candidateShadowsForPoint(index: ShadowGridIndex, coord: [number, number]): ShadowPolygon[] {
+  const cx = Math.floor(coord[0] / index.cellSizeDegLon);
+  const cy = Math.floor(coord[1] / index.cellSizeDegLat);
+  return index.cells.get(`${cx},${cy}`) ?? [];
+}
+
 /**
  * Computes, for every distinct edge geometry in the graph, the fraction (0-1) of its
  * length that falls inside any shadow polygon. Keyed by a coordinate-based signature so
@@ -23,6 +76,11 @@ export function computeEdgeShadeFractions(graph: RoadGraph, shadows: ShadowPolyg
   if (shadows.length === 0) {
     return result; // no shadows => everything is 0% shaded, callers treat missing key as 0
   }
+
+  // Built once per call (shadow polygons don't change while we iterate all edges/samples),
+  // so per-sample lookups only test the handful of shadows near that point instead of
+  // linearly scanning every shadow polygon in the area.
+  const index = buildShadowGridIndex(shadows);
 
   const seen = new Set<string>();
   for (const edges of graph.adjacency.values()) {
@@ -37,7 +95,7 @@ export function computeEdgeShadeFractions(graph: RoadGraph, shadows: ShadowPolyg
       for (let i = 0; i < n; i++) {
         const t = n === 1 ? 0.5 : i / (n - 1);
         const sample: [number, number] = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-        if (isPointInAnyShadow(sample, shadows)) shadedSamples++;
+        if (isPointInAnyShadow(sample, index)) shadedSamples++;
       }
       result.set(key, shadedSamples / n);
     }
@@ -53,9 +111,11 @@ function edgeSignature(edge: GraphEdge): string {
   return p1 < p2 ? `${p1}|${p2}` : `${p2}|${p1}`;
 }
 
-function isPointInAnyShadow(coord: [number, number], shadows: ShadowPolygon[]): boolean {
+function isPointInAnyShadow(coord: [number, number], index: ShadowGridIndex): boolean {
+  const candidates = candidateShadowsForPoint(index, coord);
+  if (candidates.length === 0) return false;
   const pt = turf.point(coord);
-  for (const s of shadows) {
+  for (const s of candidates) {
     if (turf.booleanPointInPolygon(pt, s.polygon)) return true;
   }
   return false;
