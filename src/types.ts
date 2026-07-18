@@ -50,8 +50,6 @@ export interface RoadsFeatureCollection {
   }>;
 }
 
-export type TapState = 'none' | 'start-set' | 'both-set';
-
 export interface SunState {
   altitudeDeg: number;
   azimuthDeg: number;

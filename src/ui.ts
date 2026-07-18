@@ -6,7 +6,10 @@ import { OTEMACHI_CENTER, renderMarker, renderRoute, renderShadows, type MapLaye
 import { RoadGraph } from './graph';
 import { computeShadows, type BuildingsFeatureCollection, type ShadowPolygon } from './shadow';
 import { buildShadowGridIndex, computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
-import type { RouteResult, TapState } from './types';
+import type { RouteResult } from './types';
+
+/** Which of the two input fields (if any) is currently waiting for the next map tap. */
+type ArmedField = 'start' | 'end' | null;
 
 function byId<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -47,8 +50,13 @@ export function startApp(
   const nowButton = byId<HTMLButtonElement>('now-button');
   const resetButton = byId<HTMLButtonElement>('reset-button');
   const routeButton = byId<HTMLButtonElement>('route-button');
-  const statusStart = byId<HTMLSpanElement>('status-start');
-  const statusEnd = byId<HTMLSpanElement>('status-end');
+  const fieldStart = byId<HTMLDivElement>('field-start');
+  const fieldEnd = byId<HTMLDivElement>('field-end');
+  const fieldStartText = byId<HTMLSpanElement>('field-start-text');
+  const fieldEndText = byId<HTMLSpanElement>('field-end-text');
+  const clearStartButton = byId<HTMLButtonElement>('clear-start');
+  const clearEndButton = byId<HTMLButtonElement>('clear-end');
+  const routeHint = byId<HTMLDivElement>('route-hint');
   const sunInfo = byId<HTMLDivElement>('sun-info');
   const errorMessage = byId<HTMLDivElement>('error-message');
   const resultPanel = byId<HTMLDivElement>('result-panel');
@@ -61,10 +69,12 @@ export function startApp(
   `;
 
   // ---- state ----
-  let tapState: TapState = 'none';
+  let armedField: ArmedField = null;
   let workingGraph: RoadGraph = baseGraph.clone();
   let startInfo: PointInfo | null = null;
   let endInfo: PointInfo | null = null;
+  let startMarker: L.CircleMarker | null = null;
+  let endMarker: L.CircleMarker | null = null;
   let currentShadows: ShadowPolygon[] = [];
   let hasComputedRoute = false;
 
@@ -78,15 +88,47 @@ export function startApp(
     errorMessage.textContent = msg;
   }
 
-  function updateStatusChips(): void {
-    statusStart.textContent = startInfo
-      ? `出発地: ${startInfo.lat.toFixed(5)}, ${startInfo.lon.toFixed(5)}`
-      : '出発地: 未設定';
-    statusEnd.textContent = endInfo
-      ? `目的地: ${endInfo.lat.toFixed(5)}, ${endInfo.lon.toFixed(5)}`
-      : '目的地: 未設定';
-    statusStart.classList.toggle('chip-active', !!startInfo);
-    statusEnd.classList.toggle('chip-active', !!endInfo);
+  function updateFieldDisplays(): void {
+    if (startInfo) {
+      fieldStartText.textContent = `${startInfo.lat.toFixed(5)}, ${startInfo.lon.toFixed(5)}`;
+      fieldStart.classList.add('field-set');
+      clearStartButton.hidden = false;
+    } else {
+      fieldStartText.textContent = 'タップして地図で選択';
+      fieldStart.classList.remove('field-set');
+      clearStartButton.hidden = true;
+    }
+    if (endInfo) {
+      fieldEndText.textContent = `${endInfo.lat.toFixed(5)}, ${endInfo.lon.toFixed(5)}`;
+      fieldEnd.classList.add('field-set');
+      clearEndButton.hidden = false;
+    } else {
+      fieldEndText.textContent = 'タップして地図で選択';
+      fieldEnd.classList.remove('field-set');
+      clearEndButton.hidden = true;
+    }
+  }
+
+  /** Arms/disarms a field for the next map tap, updating the highlight + hint text. */
+  function setArmed(field: ArmedField): void {
+    armedField = field;
+    fieldStart.classList.toggle('field-armed', field === 'start');
+    fieldEnd.classList.toggle('field-armed', field === 'end');
+    if (field === 'start') {
+      routeHint.hidden = false;
+      routeHint.textContent = '地図をタップして出発地を選択してください';
+    } else if (field === 'end') {
+      routeHint.hidden = false;
+      routeHint.textContent = '地図をタップして目的地を選択してください';
+    } else {
+      routeHint.hidden = true;
+      routeHint.textContent = '';
+    }
+  }
+
+  function toggleArmed(field: 'start' | 'end'): void {
+    showError(null);
+    setArmed(armedField === field ? null : field);
   }
 
   function updateRouteButtonState(): void {
@@ -117,47 +159,98 @@ export function startApp(
     }
   }
 
+  /** Clears a stale computed route/shadow display after start or end changes. */
+  function invalidateComputedRoute(): void {
+    if (!hasComputedRoute) return;
+    layers.shortestRouteLayer.clearLayers();
+    layers.shadedRouteLayer.clearLayers();
+    layers.shadowLayer.clearLayers();
+    resultPanel.hidden = true;
+    resultPanel.innerHTML = '';
+    hasComputedRoute = false;
+  }
+
+  function setStart(info: PointInfo): void {
+    startInfo = info;
+    if (startMarker) layers.markerLayer.removeLayer(startMarker);
+    startMarker = renderMarker(layers.markerLayer, 'start', info.lat, info.lon);
+    invalidateComputedRoute();
+    updateFieldDisplays();
+    updateRouteButtonState();
+  }
+
+  function setEnd(info: PointInfo): void {
+    endInfo = info;
+    if (endMarker) layers.markerLayer.removeLayer(endMarker);
+    endMarker = renderMarker(layers.markerLayer, 'end', info.lat, info.lon);
+    invalidateComputedRoute();
+    updateFieldDisplays();
+    updateRouteButtonState();
+  }
+
+  function clearStart(): void {
+    if (!startInfo) return;
+    startInfo = null;
+    if (startMarker) {
+      layers.markerLayer.removeLayer(startMarker);
+      startMarker = null;
+    }
+    invalidateComputedRoute();
+    updateFieldDisplays();
+    updateRouteButtonState();
+  }
+
+  function clearEnd(): void {
+    if (!endInfo) return;
+    endInfo = null;
+    if (endMarker) {
+      layers.markerLayer.removeLayer(endMarker);
+      endMarker = null;
+    }
+    invalidateComputedRoute();
+    updateFieldDisplays();
+    updateRouteButtonState();
+  }
+
   function resetSelection(): void {
-    tapState = 'none';
+    workingGraph = baseGraph.clone();
     startInfo = null;
     endInfo = null;
+    startMarker = null;
+    endMarker = null;
     hasComputedRoute = false;
-    workingGraph = baseGraph.clone();
     layers.markerLayer.clearLayers();
     layers.shortestRouteLayer.clearLayers();
     layers.shadedRouteLayer.clearLayers();
     layers.shadowLayer.clearLayers();
     resultPanel.hidden = true;
     resultPanel.innerHTML = '';
-    updateStatusChips();
+    setArmed(null);
+    updateFieldDisplays();
     updateRouteButtonState();
     showError(null);
   }
 
   function handleMapClick(latlng: L.LatLng): void {
-    showError(null);
-    if (tapState === 'both-set') {
-      resetSelection();
-    }
+    // Map taps are no-ops unless the user has explicitly armed the start or end field -
+    // this is what prevents an accidental/unrelated tap from silently discarding a
+    // previously computed route.
+    if (!armedField) return;
 
+    showError(null);
     const snapped = workingGraph.snapToNetwork(latlng.lat, latlng.lng);
     if (!snapped) {
       showError('近くに道路が見つかりませんでした。別の場所をタップしてください。');
       return;
     }
 
-    if (tapState === 'none') {
-      startInfo = { nodeId: snapped.nodeId, lat: snapped.lat, lon: snapped.lon };
-      renderMarker(layers.markerLayer, 'start', snapped.lat, snapped.lon);
-      tapState = 'start-set';
-    } else if (tapState === 'start-set') {
-      endInfo = { nodeId: snapped.nodeId, lat: snapped.lat, lon: snapped.lon };
-      renderMarker(layers.markerLayer, 'end', snapped.lat, snapped.lon);
-      tapState = 'both-set';
+    const info: PointInfo = { nodeId: snapped.nodeId, lat: snapped.lat, lon: snapped.lon };
+    if (armedField === 'start') {
+      setStart(info);
+    } else {
+      setEnd(info);
     }
-
-    updateStatusChips();
-    updateRouteButtonState();
+    setArmed(null);
   }
 
   function formatRouteStats(label: string, route: RouteResult | null): string {
@@ -222,13 +315,38 @@ export function startApp(
   resetButton.addEventListener('click', resetSelection);
   routeButton.addEventListener('click', runRouteCalculation);
 
+  fieldStart.addEventListener('click', () => toggleArmed('start'));
+  fieldStart.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleArmed('start');
+    }
+  });
+  fieldEnd.addEventListener('click', () => toggleArmed('end'));
+  fieldEnd.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleArmed('end');
+    }
+  });
+
+  clearStartButton.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    clearStart();
+  });
+  clearEndButton.addEventListener('click', (e: MouseEvent) => {
+    e.stopPropagation();
+    clearEnd();
+  });
+
   // ---- initial state ----
   const initialDate = roundHourDate(new Date());
   dateInput.value = formatDateInput(initialDate);
   hourSlider.value = String(initialDate.getHours());
   hourValue.textContent = `${String(initialDate.getHours()).padStart(2, '0')}:00`;
 
-  updateStatusChips();
+  setArmed(null);
+  updateFieldDisplays();
   updateRouteButtonState();
   recomputeShadows();
 }

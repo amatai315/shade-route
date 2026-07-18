@@ -19,8 +19,10 @@ export interface MapLayers {
 
 export function initMap(containerId: string): MapLayers {
   const map = L.map(containerId, {
-    zoomControl: true,
+    zoomControl: false,
   }).setView(OTEMACHI_CENTER, 18);
+
+  L.control.zoom({ position: 'topright' }).addTo(map);
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,

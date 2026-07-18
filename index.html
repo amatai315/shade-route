@@ -13,14 +13,22 @@
     <div id="app">
       <div id="map"></div>
 
+      <div id="route-inputs" class="route-inputs">
+        <div class="route-field" id="field-start" data-field="start" role="button" tabindex="0" aria-label="出発地を選択">
+          <span class="route-field-icon route-field-icon-start" aria-hidden="true"></span>
+          <span class="route-field-text" id="field-start-text">タップして地図で選択</span>
+          <button type="button" class="route-field-clear" id="clear-start" aria-label="出発地をクリア" hidden>&times;</button>
+        </div>
+        <div class="route-field" id="field-end" data-field="end" role="button" tabindex="0" aria-label="目的地を選択">
+          <span class="route-field-icon route-field-icon-end" aria-hidden="true"></span>
+          <span class="route-field-text" id="field-end-text">タップして地図で選択</span>
+          <button type="button" class="route-field-clear" id="clear-end" aria-label="目的地をクリア" hidden>&times;</button>
+        </div>
+        <div class="route-hint" id="route-hint" hidden></div>
+      </div>
+
       <div id="panel">
         <div class="panel-handle" id="panel-handle" aria-hidden="true"></div>
-
-        <div class="panel-row status-row">
-          <span class="status-chip" id="status-start">出発地: 未設定</span>
-          <span class="status-chip" id="status-end">目的地: 未設定</span>
-          <button id="reset-button" class="btn btn-small">リセット</button>
-        </div>
 
         <div class="panel-row datetime-row">
           <label class="dt-field">
@@ -41,6 +49,7 @@
           <button id="route-button" class="btn btn-primary" disabled>
             ルート計算
           </button>
+          <button id="reset-button" class="btn btn-small">リセット</button>
         </div>
 
         <div class="panel-row error-row" id="error-message" hidden></div>
