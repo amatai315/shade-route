@@ -1,13 +1,19 @@
 """
-Extract buildings near Otemachi station (radius 300m) from PLATEAU Chiyoda
+Extract buildings near Otemachi station (radius 1000m) from PLATEAU Chiyoda
 building CityGML files packed inside raw-data/chiyoda-buildings.zip, and
 write them out as a GeoJSON FeatureCollection at public/data/buildings.geojson.
 
-Only two zip entries are relevant (others are out of the target area):
+Eight zip entries cover the target area (others are out of range):
+    udx/bldg/53394610_bldg_6697_op.gml
     udx/bldg/53394611_bldg_6697_op.gml
+    udx/bldg/53394620_bldg_6697_op.gml
     udx/bldg/53394621_bldg_6697_op.gml
+    udx/bldg/53394622_bldg_6697_op.gml
+    udx/bldg/53394630_bldg_6697_op.gml
+    udx/bldg/53394631_bldg_6697_op.gml
+    udx/bldg/53394632_bldg_6697_op.gml
 
-The zip is ~1.9GB and the two GML entries are ~168MB / ~254MB uncompressed,
+The zip is ~1.9GB and the GML entries total roughly ~1GB uncompressed,
 so this script streams each entry via zipfile.ZipFile.open() and parses it
 incrementally with xml.etree.ElementTree.iterparse(), clearing elements as
 it goes so memory stays low regardless of file size.
@@ -26,14 +32,20 @@ ZIP_PATH = ROOT_DIR / "raw-data" / "chiyoda-buildings.zip"
 OUT_PATH = ROOT_DIR / "public" / "data" / "buildings.geojson"
 
 ENTRIES = [
+    "udx/bldg/53394610_bldg_6697_op.gml",
     "udx/bldg/53394611_bldg_6697_op.gml",
+    "udx/bldg/53394620_bldg_6697_op.gml",
     "udx/bldg/53394621_bldg_6697_op.gml",
+    "udx/bldg/53394622_bldg_6697_op.gml",
+    "udx/bldg/53394630_bldg_6697_op.gml",
+    "udx/bldg/53394631_bldg_6697_op.gml",
+    "udx/bldg/53394632_bldg_6697_op.gml",
 ]
 
 # Otemachi station center
 CENTER_LAT = 35.6862
 CENTER_LON = 139.7671
-RADIUS_M = 300.0
+RADIUS_M = 1000.0
 
 # meters per degree (local planar approximation around Otemachi)
 M_PER_DEG_LAT = 111000.0

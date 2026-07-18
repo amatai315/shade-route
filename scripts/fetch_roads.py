@@ -1,5 +1,5 @@
 """
-Fetch pedestrian-usable roads within ~350m of Otemachi station from the
+Fetch pedestrian-usable roads within ~1000m of Otemachi station from the
 Overpass API and write them out as a GeoJSON FeatureCollection at
 public/data/roads.geojson.
 
@@ -25,11 +25,11 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 CENTER_LAT = 35.6862
 CENTER_LON = 139.7671
-RADIUS_M = 400  # Overpass fetch radius - a bit wider buffer than the buildings' 300m,
+RADIUS_M = 1050  # Overpass fetch radius - a bit wider buffer than the buildings' 1000m,
 # so that ways crossing the target area are captured whole before we clip them
 # down to CLIP_RADIUS_M below (Overpass around: includes a whole way if ANY of
 # its nodes is within range, so raw results can extend well past RADIUS_M).
-CLIP_RADIUS_M = 350  # final output is clipped so every vertex is within this radius
+CLIP_RADIUS_M = 1000  # final output is clipped so every vertex is within this radius
 
 HIGHWAY_VALUES = [
     "footway",
@@ -43,7 +43,7 @@ HIGHWAY_VALUES = [
 ]
 
 QUERY = f"""
-[out:json][timeout:60];
+[out:json][timeout:180];
 (
   way["highway"~"^({'|'.join(HIGHWAY_VALUES)})$"](around:{RADIUS_M},{CENTER_LAT},{CENTER_LON});
 );
@@ -136,7 +136,7 @@ def fetch_overpass():
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=90) as resp:
+    with urllib.request.urlopen(req, timeout=200) as resp:
         body = resp.read()
     return json.loads(body)
 
@@ -205,6 +205,13 @@ def main():
         print("WARNING: 0 road features - query or parsing is likely broken.")
 
     # Verify every vertex in the output is within CLIP_RADIUS_M of the center.
+    # A tiny epsilon tolerance absorbs floating-point/interpolation noise:
+    # clip_linestring() interpolates the boundary crossing point linearly in
+    # lon/lat space, while distance here is the (nonlinear) haversine great-
+    # circle distance, so the "never overshoots" guarantee only holds to
+    # floating-point precision (observed overshoots are on the order of
+    # 1e-6 m, i.e. micrometers - far below GPS/rendering precision).
+    EPSILON_M = 1e-3
     max_dist = 0.0
     vertex_count = 0
     over_limit = 0
@@ -214,17 +221,17 @@ def main():
             vertex_count += 1
             if d > max_dist:
                 max_dist = d
-            if d > CLIP_RADIUS_M:
+            if d > CLIP_RADIUS_M + EPSILON_M:
                 over_limit += 1
     print(
-        f"Verification: {vertex_count} vertices, max distance from center = {max_dist:.2f}m, "
-        f"{over_limit} vertices over {CLIP_RADIUS_M}m"
+        f"Verification: {vertex_count} vertices, max distance from center = {max_dist:.6f}m, "
+        f"{over_limit} vertices over {CLIP_RADIUS_M}m (+{EPSILON_M}m epsilon)"
     )
     if over_limit > 0:
         print(f"ERROR: {over_limit} vertices exceed the {CLIP_RADIUS_M}m clip radius!")
         sys.exit(1)
     else:
-        print(f"OK: all vertices are within {CLIP_RADIUS_M}m of the center.")
+        print(f"OK: all vertices are within {CLIP_RADIUS_M}m (+{EPSILON_M}m epsilon) of the center.")
 
 
 if __name__ == "__main__":
