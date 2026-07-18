@@ -5,7 +5,7 @@ import type L from 'leaflet';
 import { OTEMACHI_CENTER, renderMarker, renderRoute, renderShadows, type MapLayers } from './map';
 import { RoadGraph } from './graph';
 import { computeShadows, type BuildingsFeatureCollection, type ShadowPolygon } from './shadow';
-import { computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
+import { buildShadowGridIndex, computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
 import type { RouteResult, TapState } from './types';
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -175,7 +175,10 @@ export function startApp(
     }
     showError(null);
 
-    const shadeFractions = computeEdgeShadeFractions(workingGraph, currentShadows);
+    // Built once and shared with findShadowsAlongEdges below - both operate over the same
+    // currentShadows set, so there's no need to re-index them separately.
+    const shadowIndex = buildShadowGridIndex(currentShadows);
+    const shadeFractions = computeEdgeShadeFractions(workingGraph, currentShadows, shadowIndex);
     const { shortest, shaded } = computeRoutes(workingGraph, startInfo.nodeId, endInfo.nodeId, shadeFractions);
 
     if (!shortest && !shaded) {
@@ -191,7 +194,7 @@ export function startApp(
     renderRoute(layers.shadedRouteLayer, shaded, '#1565c0');
 
     const routeEdges = [...(shortest?.edges ?? []), ...(shaded?.edges ?? [])];
-    const relevantShadows = findShadowsAlongEdges(routeEdges, currentShadows);
+    const relevantShadows = findShadowsAlongEdges(routeEdges, currentShadows, shadowIndex);
     renderShadows(layers, relevantShadows);
 
     resultPanel.hidden = false;

@@ -23,13 +23,13 @@ const METERS_PER_DEGREE_LAT = 111320;
  * cell its bounding box overlaps, so a point-in-cell lookup only needs to test a small
  * handful of nearby polygons instead of the whole set.
  */
-interface ShadowGridIndex {
+export interface ShadowGridIndex {
   cellSizeDegLon: number;
   cellSizeDegLat: number;
   cells: Map<string, ShadowPolygon[]>;
 }
 
-function buildShadowGridIndex(shadows: ShadowPolygon[]): ShadowGridIndex {
+export function buildShadowGridIndex(shadows: ShadowPolygon[]): ShadowGridIndex {
   // Use a representative latitude (first shadow's bbox) to convert the meter-based cell
   // size into degrees-of-longitude, correcting for latitude distortion. Good enough for a
   // grid whose only job is coarse candidate filtering (exact test happens afterwards).
@@ -68,11 +68,51 @@ function candidateShadowsForPoint(index: ShadowGridIndex, coord: [number, number
 }
 
 /**
+ * Collects the deduplicated set of shadow polygons registered in every grid cell touched by
+ * the given bounding box (in [minLon, minLat, maxLon, maxLat] order). Unlike
+ * candidateShadowsForPoint, this covers the whole span of a bbox rather than a single cell,
+ * so a caller can gather every polygon that *could* intersect a line/shape spanning several
+ * cells without missing any that only overlap the shape's interior.
+ */
+function candidateShadowsForBBox(
+  index: ShadowGridIndex,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): ShadowPolygon[] {
+  const cx0 = Math.floor(minX / index.cellSizeDegLon);
+  const cx1 = Math.floor(maxX / index.cellSizeDegLon);
+  const cy0 = Math.floor(minY / index.cellSizeDegLat);
+  const cy1 = Math.floor(maxY / index.cellSizeDegLat);
+
+  const seen = new Set<ShadowPolygon>();
+  const result: ShadowPolygon[] = [];
+  for (let cx = cx0; cx <= cx1; cx++) {
+    for (let cy = cy0; cy <= cy1; cy++) {
+      const list = index.cells.get(`${cx},${cy}`);
+      if (!list) continue;
+      for (const s of list) {
+        if (!seen.has(s)) {
+          seen.add(s);
+          result.push(s);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/**
  * Computes, for every distinct edge geometry in the graph, the fraction (0-1) of its
  * length that falls inside any shadow polygon. Keyed by a coordinate-based signature so
  * both directions of the same physical segment share one lookup.
  */
-export function computeEdgeShadeFractions(graph: RoadGraph, shadows: ShadowPolygon[]): Map<string, number> {
+export function computeEdgeShadeFractions(
+  graph: RoadGraph,
+  shadows: ShadowPolygon[],
+  prebuiltIndex?: ShadowGridIndex,
+): Map<string, number> {
   const result = new Map<string, number>();
   if (shadows.length === 0) {
     return result; // no shadows => everything is 0% shaded, callers treat missing key as 0
@@ -80,8 +120,10 @@ export function computeEdgeShadeFractions(graph: RoadGraph, shadows: ShadowPolyg
 
   // Built once per call (shadow polygons don't change while we iterate all edges/samples),
   // so per-sample lookups only test the handful of shadows near that point instead of
-  // linearly scanning every shadow polygon in the area.
-  const index = buildShadowGridIndex(shadows);
+  // linearly scanning every shadow polygon in the area. Callers that already built an index
+  // for the same shadow set (e.g. runRouteCalculation, which also calls
+  // findShadowsAlongEdges) can pass it in via prebuiltIndex to avoid building it twice.
+  const index = prebuiltIndex ?? buildShadowGridIndex(shadows);
 
   const seen = new Set<string>();
   for (const edges of graph.adjacency.values()) {
@@ -106,34 +148,45 @@ export function computeEdgeShadeFractions(graph: RoadGraph, shadows: ShadowPolyg
 
 /**
  * Finds the subset of shadow polygons that actually overlap a given set of edges (e.g. the
- * edges making up a computed route), using the same sampling density and point-in-polygon
- * test as computeEdgeShadeFractions. Used so only route-relevant shadows are rendered,
+ * edges making up a computed route). Used so only route-relevant shadows are rendered,
  * instead of every building shadow in the loaded area.
+ *
+ * Unlike computeEdgeShadeFractions (which only needs an approximate shaded-fraction estimate
+ * and so uses point sampling), this must not miss polygons that only clip a short, tangential
+ * span of an edge - a false negative here means a shadow that genuinely touches the rendered
+ * route silently fails to draw. So instead of testing sample points, we gather every shadow
+ * registered in a grid cell touched by the edge's bounding box, and for each candidate run an
+ * exact geometric intersection test (turf.booleanIntersects) between the edge's LineString and
+ * the polygon.
  */
-export function findShadowsAlongEdges(edges: GraphEdge[], shadows: ShadowPolygon[]): ShadowPolygon[] {
+export function findShadowsAlongEdges(
+  edges: GraphEdge[],
+  shadows: ShadowPolygon[],
+  prebuiltIndex?: ShadowGridIndex,
+): ShadowPolygon[] {
   const result: ShadowPolygon[] = [];
   if (edges.length === 0 || shadows.length === 0) {
     return result;
   }
 
-  const index = buildShadowGridIndex(shadows);
+  const index = prebuiltIndex ?? buildShadowGridIndex(shadows);
   const included = new Set<ShadowPolygon>();
 
   for (const edge of edges) {
     const [a, b] = edge.coords;
-    const n = sampleCountForEdge(edge.distance);
-    for (let i = 0; i < n; i++) {
-      const t = n === 1 ? 0.5 : i / (n - 1);
-      const sample: [number, number] = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-      const candidates = candidateShadowsForPoint(index, sample);
-      if (candidates.length === 0) continue;
-      const pt = turf.point(sample);
-      for (const s of candidates) {
-        if (included.has(s)) continue;
-        if (turf.booleanPointInPolygon(pt, s.polygon)) {
-          included.add(s);
-          result.push(s);
-        }
+    const minX = Math.min(a[0], b[0]);
+    const maxX = Math.max(a[0], b[0]);
+    const minY = Math.min(a[1], b[1]);
+    const maxY = Math.max(a[1], b[1]);
+    const candidates = candidateShadowsForBBox(index, minX, minY, maxX, maxY);
+    if (candidates.length === 0) continue;
+
+    const line = turf.lineString([a, b]);
+    for (const s of candidates) {
+      if (included.has(s)) continue;
+      if (turf.booleanIntersects(line, s.polygon)) {
+        included.add(s);
+        result.push(s);
       }
     }
   }
