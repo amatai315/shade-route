@@ -2,6 +2,7 @@
 
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import * as turf from '@turf/turf';
 import type { ShadowPolygon } from './shadow';
 import type { RouteResult } from './types';
 
@@ -47,17 +48,49 @@ export function renderRoads(layers: MapLayers, roadsGeoJson: GeoJSON.FeatureColl
   layers.roadsLayer.addData(roadsGeoJson);
 }
 
+// Single shared style used for the (unioned) shadow layer. 0.48 is chosen so an isolated
+// small building's shadow reads at roughly the same visual darkness that 2-3 overlapping
+// shadows used to produce under the old per-polygon compositing (~0.58-0.73 apparent
+// opacity), without going so dark that the basemap/route lines disappear underneath it.
+const SHADOW_STYLE: L.PathOptions = {
+  color: '#333333',
+  weight: 0,
+  fillColor: '#3a3a3a',
+  fillOpacity: 0.48,
+};
+
+/**
+ * Renders shadow polygons as a single merged layer so that overlapping shadows (e.g. from
+ * densely packed buildings, or one large building's shadow crossing another) don't stack
+ * multiple semi-transparent fills on top of each other and read as darker than an isolated
+ * small building's shadow. All shadows are unioned into one Polygon/MultiPolygon geometry
+ * before being drawn, so every shaded area gets exactly the same fillOpacity regardless of
+ * how many building shadows contributed to it.
+ */
 export function renderShadows(layers: MapLayers, shadows: ShadowPolygon[]): void {
   layers.shadowLayer.clearLayers();
-  for (const shadow of shadows) {
-    L.geoJSON(shadow.polygon, {
-      style: {
-        color: '#333333',
-        weight: 0,
-        fillColor: '#3a3a3a',
-        fillOpacity: 0.35,
-      },
-    }).addTo(layers.shadowLayer);
+  if (shadows.length === 0) return;
+
+  if (shadows.length === 1) {
+    L.geoJSON(shadows[0].polygon, { style: SHADOW_STYLE }).addTo(layers.shadowLayer);
+    return;
+  }
+
+  let merged: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null = null;
+  try {
+    merged = turf.union(turf.featureCollection(shadows.map((s) => s.polygon)));
+  } catch {
+    // Degenerate/self-intersecting input geometry - fall back to drawing individually below
+    // rather than dropping the shadows entirely.
+    merged = null;
+  }
+
+  if (merged) {
+    L.geoJSON(merged, { style: SHADOW_STYLE }).addTo(layers.shadowLayer);
+  } else {
+    for (const shadow of shadows) {
+      L.geoJSON(shadow.polygon, { style: SHADOW_STYLE }).addTo(layers.shadowLayer);
+    }
   }
 }
 
