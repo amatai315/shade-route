@@ -317,6 +317,9 @@ export function startApp(
 
   fieldStart.addEventListener('click', () => toggleArmed('start'));
   fieldStart.addEventListener('keydown', (e: KeyboardEvent) => {
+    // Ignore keydowns that bubbled up from the clear button - otherwise Enter/Space on
+    // the clear button would both trigger its click handler AND re-arm this field.
+    if (e.target !== fieldStart) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       toggleArmed('start');
@@ -324,6 +327,7 @@ export function startApp(
   });
   fieldEnd.addEventListener('click', () => toggleArmed('end'));
   fieldEnd.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.target !== fieldEnd) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       toggleArmed('end');
