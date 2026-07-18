@@ -1,0 +1,240 @@
+:root {
+  color-scheme: light;
+  --color-bg: #f4f5f7;
+  --color-panel: #ffffff;
+  --color-text: #1f2933;
+  --color-muted: #6b7280;
+  --color-border: #e2e5e9;
+  --color-accent: #1565c0;
+  --color-shaded: #1565c0;
+  --color-shortest: #c62828;
+  --color-danger-bg: #fdecea;
+  --color-danger-text: #a1281f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overscroll-behavior: none;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Yu Gothic', 'Segoe UI', sans-serif;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+#map {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  background: #dfe3e6;
+}
+
+#panel {
+  flex: 0 0 auto;
+  max-height: 46vh;
+  overflow-y: auto;
+  background: var(--color-panel);
+  border-top: 1px solid var(--color-border);
+  padding: 6px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
+  -webkit-overflow-scrolling: touch;
+}
+
+.panel-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--color-border);
+  border-radius: 2px;
+  margin: 4px auto 8px;
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.status-row {
+  justify-content: space-between;
+}
+
+.status-chip {
+  flex: 1 1 auto;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-chip.chip-active {
+  background: #e8f0fe;
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.datetime-row {
+  align-items: center;
+}
+
+.dt-field {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--color-muted);
+  gap: 2px;
+}
+
+.dt-field input[type='date'] {
+  font-size: 14px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  min-height: 36px;
+}
+
+.dt-field-hour {
+  flex: 1 1 140px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.dt-field-hour .dt-label {
+  flex: 0 0 auto;
+}
+
+#hour-slider {
+  flex: 1 1 auto;
+  min-height: 32px;
+}
+
+#hour-value {
+  font-size: 13px;
+  color: var(--color-text);
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sun-info {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.action-row {
+  justify-content: stretch;
+}
+
+.btn {
+  min-height: 44px;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.btn-small {
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  flex: 0 0 auto;
+}
+
+.btn-primary {
+  flex: 1 1 auto;
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.btn-primary:disabled {
+  background: #b0bec5;
+  cursor: not-allowed;
+}
+
+.error-row {
+  font-size: 12px;
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.result-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  background: var(--color-bg);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.result-item {
+  font-size: 13px;
+}
+
+.legend-row {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-muted);
+  margin-bottom: 0;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+}
+
+.swatch-shaded {
+  background: var(--color-shaded);
+}
+
+.swatch-shortest {
+  background: var(--color-shortest);
+}
+
+.swatch-shadow {
+  background: #3a3a3a;
+  opacity: 0.5;
+}
+
+.leaflet-control-attribution {
+  font-size: 9px;
+}
