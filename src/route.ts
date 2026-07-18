@@ -4,6 +4,7 @@ import * as turf from '@turf/turf';
 import type { GraphEdge, RouteResult } from './types';
 import type { RoadGraph } from './graph';
 import type { ShadowPolygon } from './shadow';
+import { MinHeap } from './priorityQueue';
 
 /** Extra "cost" applied per meter of sun-exposed path length, relative to 1 for shaded meters. */
 const SHADE_PENALTY_PER_METER = 6;
@@ -133,21 +134,21 @@ function dijkstra(graph: RoadGraph, startId: string, endId: string, options: Dij
   for (const id of graph.nodes.keys()) dist.set(id, Infinity);
   dist.set(startId, 0);
 
-  // Simple array-based priority queue - graph is small (~hundreds of nodes), so O(V^2) is plenty fast.
-  const unvisited = new Set(graph.nodes.keys());
+  // Binary-heap priority queue: with ~9,000 nodes and a comparable edge count, the
+  // previous O(V^2) linear-scan-for-minimum approach took well over a second per call.
+  // A heap gets this down to O((V+E) log V). We use "lazy deletion" - whenever a shorter
+  // distance to a node is found we push a new (distance, node) pair rather than mutating
+  // an existing heap entry, and simply skip stale entries (checked against `visited` and
+  // the latest known `dist`) when they're popped.
+  const heap = new MinHeap<string>();
+  heap.push(0, startId);
 
-  while (unvisited.size > 0) {
-    let currentId: string | null = null;
-    let currentDist = Infinity;
-    for (const id of unvisited) {
-      const d = dist.get(id) ?? Infinity;
-      if (d < currentDist) {
-        currentDist = d;
-        currentId = id;
-      }
-    }
-    if (currentId === null || currentDist === Infinity) break;
-    unvisited.delete(currentId);
+  for (;;) {
+    const top = heap.pop();
+    if (!top) break;
+    const { priority: currentDist, value: currentId } = top;
+    if (visited.has(currentId)) continue;
+    if (currentDist > (dist.get(currentId) ?? Infinity)) continue; // stale entry, superseded by a shorter path already processed
     visited.add(currentId);
 
     if (currentId === endId) break;
@@ -160,6 +161,7 @@ function dijkstra(graph: RoadGraph, startId: string, endId: string, options: Dij
       if (alt < (dist.get(edge.to) ?? Infinity)) {
         dist.set(edge.to, alt);
         prevEdge.set(edge.to, edge);
+        heap.push(alt, edge.to);
       }
     }
   }
