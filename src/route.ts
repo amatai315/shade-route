@@ -104,6 +104,43 @@ export function computeEdgeShadeFractions(graph: RoadGraph, shadows: ShadowPolyg
   return result;
 }
 
+/**
+ * Finds the subset of shadow polygons that actually overlap a given set of edges (e.g. the
+ * edges making up a computed route), using the same sampling density and point-in-polygon
+ * test as computeEdgeShadeFractions. Used so only route-relevant shadows are rendered,
+ * instead of every building shadow in the loaded area.
+ */
+export function findShadowsAlongEdges(edges: GraphEdge[], shadows: ShadowPolygon[]): ShadowPolygon[] {
+  const result: ShadowPolygon[] = [];
+  if (edges.length === 0 || shadows.length === 0) {
+    return result;
+  }
+
+  const index = buildShadowGridIndex(shadows);
+  const included = new Set<ShadowPolygon>();
+
+  for (const edge of edges) {
+    const [a, b] = edge.coords;
+    const n = sampleCountForEdge(edge.distance);
+    for (let i = 0; i < n; i++) {
+      const t = n === 1 ? 0.5 : i / (n - 1);
+      const sample: [number, number] = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const candidates = candidateShadowsForPoint(index, sample);
+      if (candidates.length === 0) continue;
+      const pt = turf.point(sample);
+      for (const s of candidates) {
+        if (included.has(s)) continue;
+        if (turf.booleanPointInPolygon(pt, s.polygon)) {
+          included.add(s);
+          result.push(s);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 function edgeSignature(edge: GraphEdge): string {
   const [a, b] = edge.coords;
   // order-independent so both directions of the same segment map to the same key

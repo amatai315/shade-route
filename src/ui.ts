@@ -5,7 +5,7 @@ import type L from 'leaflet';
 import { OTEMACHI_CENTER, renderMarker, renderRoute, renderShadows, type MapLayers } from './map';
 import { RoadGraph } from './graph';
 import { computeShadows, type BuildingsFeatureCollection, type ShadowPolygon } from './shadow';
-import { computeEdgeShadeFractions, computeRoutes } from './route';
+import { computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
 import type { RouteResult, TapState } from './types';
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -103,7 +103,6 @@ export function startApp(
     const date = getSelectedDate();
     const { shadows, sun } = computeShadows(buildings, date, OTEMACHI_CENTER[0], OTEMACHI_CENTER[1]);
     currentShadows = shadows;
-    renderShadows(layers, shadows);
 
     if (!sun.isDaylight) {
       sunInfo.textContent = `太陽高度: ${sun.altitudeDeg.toFixed(1)}° (日没後/日の出前のため影なし)`;
@@ -113,6 +112,8 @@ export function startApp(
 
     if (hasComputedRoute && startInfo && endInfo) {
       runRouteCalculation();
+    } else {
+      layers.shadowLayer.clearLayers();
     }
   }
 
@@ -125,6 +126,7 @@ export function startApp(
     layers.markerLayer.clearLayers();
     layers.shortestRouteLayer.clearLayers();
     layers.shadedRouteLayer.clearLayers();
+    layers.shadowLayer.clearLayers();
     resultPanel.hidden = true;
     resultPanel.innerHTML = '';
     updateStatusChips();
@@ -180,12 +182,17 @@ export function startApp(
       showError('出発地と目的地の間にルートが見つかりませんでした。');
       layers.shortestRouteLayer.clearLayers();
       layers.shadedRouteLayer.clearLayers();
+      layers.shadowLayer.clearLayers();
       resultPanel.hidden = true;
       return;
     }
 
     renderRoute(layers.shortestRouteLayer, shortest, '#c62828');
     renderRoute(layers.shadedRouteLayer, shaded, '#1565c0');
+
+    const routeEdges = [...(shortest?.edges ?? []), ...(shaded?.edges ?? [])];
+    const relevantShadows = findShadowsAlongEdges(routeEdges, currentShadows);
+    renderShadows(layers, relevantShadows);
 
     resultPanel.hidden = false;
     resultPanel.innerHTML = formatRouteStats('日陰優先ルート', shaded) + formatRouteStats('最短距離ルート', shortest);
