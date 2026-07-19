@@ -8,57 +8,81 @@
     />
     <meta name="theme-color" content="#1f2933" />
     <title>日陰ルート提案 PoC</title>
-    <script type="module" crossorigin src="/shade-route/assets/index-D6YSdD-p.js"></script>
-    <link rel="stylesheet" crossorigin href="/shade-route/assets/index-4Z68ufXO.css">
+    <script type="module" crossorigin src="/shade-route/assets/index-DzwKleM_.js"></script>
+    <link rel="stylesheet" crossorigin href="/shade-route/assets/index-xrc6Tk_0.css">
   </head>
   <body>
     <div id="app">
       <div id="map"></div>
 
       <div id="route-inputs" class="route-inputs">
-        <div class="route-field" id="field-start" data-field="start" role="button" tabindex="0" aria-label="出発地を選択">
-          <span class="route-field-icon route-field-icon-start" aria-hidden="true"></span>
-          <span class="route-field-text" id="field-start-text">タップして地図で選択</span>
-          <button type="button" class="route-field-clear" id="clear-start" aria-label="出発地をクリア" hidden>&times;</button>
+        <div class="route-inputs-header">
+          <span class="route-inputs-label" id="route-inputs-label">出発地・目的地</span>
+          <button
+            type="button"
+            id="route-inputs-toggle"
+            class="route-inputs-toggle"
+            aria-expanded="true"
+            aria-controls="route-inputs-content"
+            aria-label="出発地・目的地入力を折りたたむ"
+          >︿</button>
         </div>
-        <div class="route-field" id="field-end" data-field="end" role="button" tabindex="0" aria-label="目的地を選択">
-          <span class="route-field-icon route-field-icon-end" aria-hidden="true"></span>
-          <span class="route-field-text" id="field-end-text">タップして地図で選択</span>
-          <button type="button" class="route-field-clear" id="clear-end" aria-label="目的地をクリア" hidden>&times;</button>
+        <div id="route-inputs-content">
+          <div class="route-field" id="field-start" data-field="start" role="button" tabindex="0" aria-label="出発地を選択">
+            <span class="route-field-icon route-field-icon-start" aria-hidden="true"></span>
+            <span class="route-field-text" id="field-start-text">タップして地図で選択</span>
+            <button type="button" class="route-field-clear" id="clear-start" aria-label="出発地をクリア" hidden>&times;</button>
+          </div>
+          <div class="route-field" id="field-end" data-field="end" role="button" tabindex="0" aria-label="目的地を選択">
+            <span class="route-field-icon route-field-icon-end" aria-hidden="true"></span>
+            <span class="route-field-text" id="field-end-text">タップして地図で選択</span>
+            <button type="button" class="route-field-clear" id="clear-end" aria-label="目的地をクリア" hidden>&times;</button>
+          </div>
+          <div class="route-hint" id="route-hint" hidden></div>
         </div>
-        <div class="route-hint" id="route-hint" hidden></div>
       </div>
 
       <div id="panel">
-        <div class="panel-handle" id="panel-handle" aria-hidden="true"></div>
+        <button
+          type="button"
+          id="panel-toggle"
+          class="panel-toggle"
+          aria-expanded="true"
+          aria-controls="panel-content"
+          aria-label="パネルを折りたたむ"
+        >
+          <span class="panel-handle-bar" aria-hidden="true"></span>
+        </button>
 
-        <div class="panel-row datetime-row">
-          <label class="dt-field">
-            <span class="dt-label">日付</span>
-            <input type="date" id="date-input" />
-          </label>
-          <label class="dt-field dt-field-hour">
-            <span class="dt-label">時刻</span>
-            <input type="range" id="hour-slider" min="0" max="23" step="1" />
-            <span id="hour-value">--:00</span>
-          </label>
-          <button id="now-button" class="btn btn-small">現在時刻に戻す</button>
+        <div id="panel-content">
+          <div class="panel-row datetime-row">
+            <label class="dt-field">
+              <span class="dt-label">日付</span>
+              <input type="date" id="date-input" />
+            </label>
+            <label class="dt-field dt-field-hour">
+              <span class="dt-label">時刻</span>
+              <input type="range" id="hour-slider" min="0" max="23" step="1" />
+              <span id="hour-value">--:00</span>
+            </label>
+            <button id="now-button" class="btn btn-small">現在時刻に戻す</button>
+          </div>
+
+          <div class="panel-row sun-info" id="sun-info">太陽情報を計算中...</div>
+
+          <div class="panel-row action-row">
+            <button id="route-button" class="btn btn-primary" disabled>
+              ルート計算
+            </button>
+            <button id="reset-button" class="btn btn-small">リセット</button>
+          </div>
+
+          <div class="panel-row error-row" id="error-message" hidden></div>
+
+          <div class="panel-row result-row" id="result-panel" hidden></div>
+
+          <div class="panel-row legend-row" id="legend"></div>
         </div>
-
-        <div class="panel-row sun-info" id="sun-info">太陽情報を計算中...</div>
-
-        <div class="panel-row action-row">
-          <button id="route-button" class="btn btn-primary" disabled>
-            ルート計算
-          </button>
-          <button id="reset-button" class="btn btn-small">リセット</button>
-        </div>
-
-        <div class="panel-row error-row" id="error-message" hidden></div>
-
-        <div class="panel-row result-row" id="result-panel" hidden></div>
-
-        <div class="panel-row legend-row" id="legend"></div>
       </div>
     </div>
   </body>
