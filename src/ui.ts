@@ -61,6 +61,10 @@ export function startApp(
   const errorMessage = byId<HTMLDivElement>('error-message');
   const resultPanel = byId<HTMLDivElement>('result-panel');
   const legend = byId<HTMLDivElement>('legend');
+  const panel = byId<HTMLDivElement>('panel');
+  const panelToggle = byId<HTMLButtonElement>('panel-toggle');
+  const routeInputs = byId<HTMLDivElement>('route-inputs');
+  const routeInputsToggle = byId<HTMLButtonElement>('route-inputs-toggle');
 
   legend.innerHTML = `
     <div class="legend-item"><span class="swatch swatch-shaded"></span>日陰優先ルート</div>
@@ -77,6 +81,8 @@ export function startApp(
   let endMarker: L.CircleMarker | null = null;
   let currentShadows: ShadowPolygon[] = [];
   let hasComputedRoute = false;
+  let panelCollapsed = false;
+  let routeInputsCollapsed = false;
 
   function showError(msg: string | null): void {
     if (!msg) {
@@ -129,6 +135,23 @@ export function startApp(
   function toggleArmed(field: 'start' | 'end'): void {
     showError(null);
     setArmed(armedField === field ? null : field);
+  }
+
+  /** Expands/collapses the bottom control panel so the map can take up more of the screen. */
+  function setPanelCollapsed(collapsed: boolean): void {
+    panelCollapsed = collapsed;
+    panel.classList.toggle('collapsed', collapsed);
+    panelToggle.setAttribute('aria-expanded', String(!collapsed));
+    panelToggle.setAttribute('aria-label', collapsed ? 'パネルを開く' : 'パネルを折りたたむ');
+  }
+
+  /** Expands/collapses the start/end input card so the map can take up more of the screen. */
+  function setRouteInputsCollapsed(collapsed: boolean): void {
+    routeInputsCollapsed = collapsed;
+    routeInputs.classList.toggle('collapsed', collapsed);
+    routeInputsToggle.setAttribute('aria-expanded', String(!collapsed));
+    routeInputsToggle.setAttribute('aria-label', collapsed ? '出発地・目的地入力を開く' : '出発地・目的地入力を折りたたむ');
+    routeInputsToggle.textContent = collapsed ? '﹀' : '︿';
   }
 
   function updateRouteButtonState(): void {
@@ -343,6 +366,15 @@ export function startApp(
     clearEnd();
   });
 
+  panelToggle.addEventListener('click', () => setPanelCollapsed(!panelCollapsed));
+
+  routeInputsToggle.addEventListener('click', () => {
+    // Collapsing the card hides the "tap map to select" hint, so disarm any pending
+    // start/end selection first to avoid a hint-less armed state lingering underneath.
+    if (armedField) setArmed(null);
+    setRouteInputsCollapsed(!routeInputsCollapsed);
+  });
+
   // ---- initial state ----
   const initialDate = roundHourDate(new Date());
   dateInput.value = formatDateInput(initialDate);
@@ -352,5 +384,7 @@ export function startApp(
   setArmed(null);
   updateFieldDisplays();
   updateRouteButtonState();
+  setPanelCollapsed(false);
+  setRouteInputsCollapsed(false);
   recomputeShadows();
 }
