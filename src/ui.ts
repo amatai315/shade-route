@@ -1,7 +1,7 @@
 // UI wiring: control panel state, map tap handling, and orchestration of the
 // shadow / graph / route modules.
 
-import type L from 'leaflet';
+import L from 'leaflet';
 import { OTEMACHI_CENTER, renderMarker, renderRoute, renderShadows, type MapLayers } from './map';
 import { RoadGraph } from './graph';
 import {
@@ -12,7 +12,22 @@ import {
   type TreesFeatureCollection,
 } from './shadow';
 import { buildShadowGridIndex, computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
-import type { RouteResult } from './types';
+import type { PlacesFeatureCollection, RouteResult } from './types';
+
+const MAX_SEARCH_RESULTS = 20;
+
+const CATEGORY_LABELS: Record<string, string> = {
+  building: '建物',
+  shop: '店舗',
+  amenity: '施設',
+  office: 'オフィス',
+  railway: '鉄道',
+  tourism: '観光',
+};
+
+function categoryLabel(category: string): string {
+  return CATEGORY_LABELS[category] ?? category;
+}
 
 /** Which of the two input fields (if any) is currently waiting for the next map tap. */
 type ArmedField = 'start' | 'end' | null;
@@ -49,6 +64,7 @@ export function startApp(
   baseGraph: RoadGraph,
   buildings: BuildingsFeatureCollection,
   trees: TreesFeatureCollection,
+  places: PlacesFeatureCollection,
   layers: MapLayers
 ): void {
   const dateInput = byId<HTMLInputElement>('date-input');
@@ -64,6 +80,9 @@ export function startApp(
   const clearStartButton = byId<HTMLButtonElement>('clear-start');
   const clearEndButton = byId<HTMLButtonElement>('clear-end');
   const routeHint = byId<HTMLDivElement>('route-hint');
+  const routeSearch = byId<HTMLDivElement>('route-search');
+  const routeSearchInput = byId<HTMLInputElement>('route-search-input');
+  const routeSearchResults = byId<HTMLDivElement>('route-search-results');
   const sunInfo = byId<HTMLDivElement>('sun-info');
   const errorMessage = byId<HTMLDivElement>('error-message');
   const resultPanel = byId<HTMLDivElement>('result-panel');
@@ -122,20 +141,77 @@ export function startApp(
     }
   }
 
-  /** Arms/disarms a field for the next map tap, updating the highlight + hint text. */
+  /** Arms/disarms a field for the next map tap or search selection, updating the highlight + hint text. */
   function setArmed(field: ArmedField): void {
     armedField = field;
     fieldStart.classList.toggle('field-armed', field === 'start');
     fieldEnd.classList.toggle('field-armed', field === 'end');
     if (field === 'start') {
       routeHint.hidden = false;
-      routeHint.textContent = '地図をタップして出発地を選択してください';
+      routeHint.textContent = '地図をタップ、または下の検索欄で出発地を選択してください';
     } else if (field === 'end') {
       routeHint.hidden = false;
-      routeHint.textContent = '地図をタップして目的地を選択してください';
+      routeHint.textContent = '地図をタップ、または下の検索欄で目的地を選択してください';
     } else {
       routeHint.hidden = true;
       routeHint.textContent = '';
+    }
+
+    // The search box only makes sense while a field is armed - always clear its contents
+    // here so no stale query/results survive into the next arm cycle or linger after disarm.
+    routeSearch.hidden = !field;
+    routeSearchInput.value = '';
+    routeSearchResults.innerHTML = '';
+  }
+
+  /** Renders up to MAX_SEARCH_RESULTS places matching `query` (case-insensitive substring),
+   *  nearest-to-map-center first. Each result is a button that runs the same confirm path
+   *  as a map tap. */
+  function renderSearchResults(query: string): void {
+    routeSearchResults.innerHTML = '';
+    const trimmed = query.trim();
+    if (!trimmed) return;
+
+    const lower = trimmed.toLowerCase();
+    const center = layers.map.getCenter();
+    const matches = places.features
+      .filter((f) => f.properties.name.toLowerCase().includes(lower))
+      .map((f) => ({
+        feature: f,
+        dist: center.distanceTo(L.latLng(f.geometry.coordinates[1], f.geometry.coordinates[0])),
+      }))
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, MAX_SEARCH_RESULTS);
+
+    if (matches.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'route-search-empty';
+      empty.textContent = '見つかりませんでした';
+      routeSearchResults.appendChild(empty);
+      return;
+    }
+
+    for (const { feature } of matches) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'route-search-result';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'route-search-result-name';
+      nameSpan.textContent = feature.properties.name;
+
+      const categorySpan = document.createElement('span');
+      categorySpan.className = 'route-search-result-category';
+      categorySpan.textContent = categoryLabel(feature.properties.category);
+
+      button.appendChild(nameSpan);
+      button.appendChild(categorySpan);
+      button.addEventListener('click', () => {
+        const [lon, lat] = feature.geometry.coordinates;
+        confirmSelectionAt(lat, lon);
+      });
+
+      routeSearchResults.appendChild(button);
     }
   }
 
@@ -262,16 +338,16 @@ export function startApp(
     showError(null);
   }
 
-  function handleMapClick(latlng: L.LatLng): void {
-    // Map taps are no-ops unless the user has explicitly armed the start or end field -
-    // this is what prevents an accidental/unrelated tap from silently discarding a
-    // previously computed route.
+  /** Shared confirm path for both a map tap and a search-result tap: snaps the given
+   *  point onto the road network, sets it as the armed field's start/end, and disarms.
+   *  No-op if no field is currently armed. */
+  function confirmSelectionAt(lat: number, lon: number): void {
     if (!armedField) return;
 
     showError(null);
-    const snapped = workingGraph.snapToNetwork(latlng.lat, latlng.lng);
+    const snapped = workingGraph.snapToNetwork(lat, lon);
     if (!snapped) {
-      showError('近くに道路が見つかりませんでした。別の場所をタップしてください。');
+      showError('近くに道路が見つかりませんでした。別の場所を選択してください。');
       return;
     }
 
@@ -282,6 +358,14 @@ export function startApp(
       setEnd(info);
     }
     setArmed(null);
+  }
+
+  function handleMapClick(latlng: L.LatLng): void {
+    // Map taps are no-ops unless the user has explicitly armed the start or end field -
+    // this is what prevents an accidental/unrelated tap from silently discarding a
+    // previously computed route.
+    if (!armedField) return;
+    confirmSelectionAt(latlng.lat, latlng.lng);
   }
 
   function formatRouteStats(label: string, route: RouteResult | null): string {
@@ -363,6 +447,10 @@ export function startApp(
       e.preventDefault();
       toggleArmed('end');
     }
+  });
+
+  routeSearchInput.addEventListener('input', () => {
+    renderSearchResults(routeSearchInput.value);
   });
 
   clearStartButton.addEventListener('click', (e: MouseEvent) => {

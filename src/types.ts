@@ -50,6 +50,16 @@ export interface RoadsFeatureCollection {
   }>;
 }
 
+/** GeoJSON FeatureCollection of named POIs (buildings/shops/stations/etc.), as loaded from data/places.geojson. */
+export interface PlacesFeatureCollection {
+  type: 'FeatureCollection';
+  features: Array<{
+    type: 'Feature';
+    geometry: { type: 'Point'; coordinates: [number, number] };
+    properties: { id: string; name: string; category: string };
+  }>;
+}
+
 export interface SunState {
   altitudeDeg: number;
   azimuthDeg: number;

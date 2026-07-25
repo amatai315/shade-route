@@ -3,7 +3,7 @@ import { initMap, renderRoads } from './map';
 import { buildGraphFromRoads } from './graph';
 import { startApp } from './ui';
 import type { BuildingsFeatureCollection, TreesFeatureCollection } from './shadow';
-import type { RoadsFeatureCollection } from './types';
+import type { PlacesFeatureCollection, RoadsFeatureCollection } from './types';
 
 async function loadJson<T>(path: string): Promise<T> {
   const url = `${import.meta.env.BASE_URL}${path}`;
@@ -18,15 +18,16 @@ async function bootstrap(): Promise<void> {
   const layers = initMap('map');
 
   try {
-    const [roads, buildings, trees] = await Promise.all([
+    const [roads, buildings, trees, places] = await Promise.all([
       loadJson<RoadsFeatureCollection>('data/roads.geojson'),
       loadJson<BuildingsFeatureCollection>('data/buildings.geojson'),
       loadJson<TreesFeatureCollection>('data/trees.geojson'),
+      loadJson<PlacesFeatureCollection>('data/places.geojson'),
     ]);
 
     renderRoads(layers, roads as unknown as GeoJSON.FeatureCollection);
     const graph = buildGraphFromRoads(roads);
-    startApp(graph, buildings, trees, layers);
+    startApp(graph, buildings, trees, places, layers);
   } catch (err) {
     const sunInfo = document.getElementById('sun-info');
     if (sunInfo) {
