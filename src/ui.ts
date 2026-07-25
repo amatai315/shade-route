@@ -42,6 +42,8 @@ interface PointInfo {
   nodeId: string;
   lat: number;
   lon: number;
+  /** Place name from a search-result selection; unset for map-tap selections, which show coordinates instead. */
+  label?: string;
 }
 
 function roundHourDate(source: Date): Date {
@@ -77,11 +79,11 @@ export function startApp(
   const fieldEnd = byId<HTMLDivElement>('field-end');
   const fieldStartText = byId<HTMLSpanElement>('field-start-text');
   const fieldEndText = byId<HTMLSpanElement>('field-end-text');
+  const fieldStartInput = byId<HTMLInputElement>('field-start-input');
+  const fieldEndInput = byId<HTMLInputElement>('field-end-input');
   const clearStartButton = byId<HTMLButtonElement>('clear-start');
   const clearEndButton = byId<HTMLButtonElement>('clear-end');
   const routeHint = byId<HTMLDivElement>('route-hint');
-  const routeSearch = byId<HTMLDivElement>('route-search');
-  const routeSearchInput = byId<HTMLInputElement>('route-search-input');
   const routeSearchResults = byId<HTMLDivElement>('route-search-results');
   const sunInfo = byId<HTMLDivElement>('sun-info');
   const errorMessage = byId<HTMLDivElement>('error-message');
@@ -122,45 +124,56 @@ export function startApp(
 
   function updateFieldDisplays(): void {
     if (startInfo) {
-      fieldStartText.textContent = `${startInfo.lat.toFixed(5)}, ${startInfo.lon.toFixed(5)}`;
+      fieldStartText.textContent = startInfo.label ?? `${startInfo.lat.toFixed(5)}, ${startInfo.lon.toFixed(5)}`;
       fieldStart.classList.add('field-set');
       clearStartButton.hidden = false;
     } else {
-      fieldStartText.textContent = 'タップして地図で選択';
+      fieldStartText.textContent = 'タップまたは入力で選択';
       fieldStart.classList.remove('field-set');
       clearStartButton.hidden = true;
     }
     if (endInfo) {
-      fieldEndText.textContent = `${endInfo.lat.toFixed(5)}, ${endInfo.lon.toFixed(5)}`;
+      fieldEndText.textContent = endInfo.label ?? `${endInfo.lat.toFixed(5)}, ${endInfo.lon.toFixed(5)}`;
       fieldEnd.classList.add('field-set');
       clearEndButton.hidden = false;
     } else {
-      fieldEndText.textContent = 'タップして地図で選択';
+      fieldEndText.textContent = 'タップまたは入力で選択';
       fieldEnd.classList.remove('field-set');
       clearEndButton.hidden = true;
     }
   }
 
-  /** Arms/disarms a field for the next map tap or search selection, updating the highlight + hint text. */
+  /** Arms/disarms a field for the next map tap or search selection, updating the highlight + hint text.
+   *  Swaps the field's static text span for its live search input (and back) via `hidden` toggling,
+   *  same pattern used elsewhere in this file (e.g. `clearStartButton.hidden`). */
   function setArmed(field: ArmedField): void {
     armedField = field;
     fieldStart.classList.toggle('field-armed', field === 'start');
     fieldEnd.classList.toggle('field-armed', field === 'end');
+
+    fieldStartText.hidden = field === 'start';
+    fieldStartInput.hidden = field !== 'start';
+    fieldEndText.hidden = field === 'end';
+    fieldEndInput.hidden = field !== 'end';
+
     if (field === 'start') {
       routeHint.hidden = false;
-      routeHint.textContent = '地図をタップ、または下の検索欄で出発地を選択してください';
+      routeHint.textContent = '地図をタップするか、この欄に入力して出発地を検索してください';
+      fieldStartInput.value = '';
+      fieldStartInput.focus();
     } else if (field === 'end') {
       routeHint.hidden = false;
-      routeHint.textContent = '地図をタップ、または下の検索欄で目的地を選択してください';
+      routeHint.textContent = '地図をタップするか、この欄に入力して目的地を検索してください';
+      fieldEndInput.value = '';
+      fieldEndInput.focus();
     } else {
       routeHint.hidden = true;
       routeHint.textContent = '';
     }
 
-    // The search box only makes sense while a field is armed - always clear its contents
+    // The results list only makes sense while a field is armed - always clear its contents
     // here so no stale query/results survive into the next arm cycle or linger after disarm.
-    routeSearch.hidden = !field;
-    routeSearchInput.value = '';
+    routeSearchResults.hidden = !field;
     routeSearchResults.innerHTML = '';
   }
 
@@ -208,7 +221,7 @@ export function startApp(
       button.appendChild(categorySpan);
       button.addEventListener('click', () => {
         const [lon, lat] = feature.geometry.coordinates;
-        confirmSelectionAt(lat, lon);
+        confirmSelectionAt(lat, lon, feature.properties.name);
       });
 
       routeSearchResults.appendChild(button);
@@ -340,8 +353,9 @@ export function startApp(
 
   /** Shared confirm path for both a map tap and a search-result tap: snaps the given
    *  point onto the road network, sets it as the armed field's start/end, and disarms.
-   *  No-op if no field is currently armed. */
-  function confirmSelectionAt(lat: number, lon: number): void {
+   *  No-op if no field is currently armed. `label` (place name) is only passed for
+   *  search-result taps; map taps leave it unset so the field falls back to coordinates. */
+  function confirmSelectionAt(lat: number, lon: number, label?: string): void {
     if (!armedField) return;
 
     showError(null);
@@ -351,7 +365,7 @@ export function startApp(
       return;
     }
 
-    const info: PointInfo = { nodeId: snapped.nodeId, lat: snapped.lat, lon: snapped.lon };
+    const info: PointInfo = { nodeId: snapped.nodeId, lat: snapped.lat, lon: snapped.lon, label };
     if (armedField === 'start') {
       setStart(info);
     } else {
@@ -449,8 +463,16 @@ export function startApp(
     }
   });
 
-  routeSearchInput.addEventListener('input', () => {
-    renderSearchResults(routeSearchInput.value);
+  // Clicking into the input (e.g. to reposition the cursor while typing) would otherwise
+  // bubble up to the field's own click listener above and immediately re-toggle (disarm)
+  // the field the user is actively typing into - same guard the clear button uses below.
+  fieldStartInput.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+  fieldEndInput.addEventListener('click', (e: MouseEvent) => e.stopPropagation());
+  fieldStartInput.addEventListener('input', () => {
+    renderSearchResults(fieldStartInput.value);
+  });
+  fieldEndInput.addEventListener('input', () => {
+    renderSearchResults(fieldEndInput.value);
   });
 
   clearStartButton.addEventListener('click', (e: MouseEvent) => {

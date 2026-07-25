@@ -176,6 +176,23 @@ body {
   font-weight: 600;
 }
 
+.route-field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--color-text);
+  border: none;
+  background: transparent;
+  outline: none;
+  padding: 0;
+}
+
+.route-field-input::placeholder {
+  color: var(--color-muted);
+  font-weight: normal;
+}
+
 .route-field-clear {
   flex: 0 0 auto;
   box-sizing: border-box;
@@ -204,27 +221,11 @@ body {
   padding: 4px 8px 2px;
 }
 
-.route-search {
-  padding: 4px 8px 6px;
-}
-
-.route-search-input {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 44px;
-  padding: 8px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-size: 14px;
-  font-family: inherit;
-  color: var(--color-text);
-  background: var(--color-panel);
-}
-
 .route-search-results {
   max-height: 45vh;
   overflow-y: auto;
   margin-top: 4px;
+  padding: 0 4px;
 }
 
 .route-search-result {
