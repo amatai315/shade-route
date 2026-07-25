@@ -2,7 +2,7 @@ import './style.css';
 import { initMap, renderRoads } from './map';
 import { buildGraphFromRoads } from './graph';
 import { startApp } from './ui';
-import type { BuildingsFeatureCollection } from './shadow';
+import type { BuildingsFeatureCollection, TreesFeatureCollection } from './shadow';
 import type { RoadsFeatureCollection } from './types';
 
 async function loadJson<T>(path: string): Promise<T> {
@@ -18,14 +18,15 @@ async function bootstrap(): Promise<void> {
   const layers = initMap('map');
 
   try {
-    const [roads, buildings] = await Promise.all([
+    const [roads, buildings, trees] = await Promise.all([
       loadJson<RoadsFeatureCollection>('data/roads.geojson'),
       loadJson<BuildingsFeatureCollection>('data/buildings.geojson'),
+      loadJson<TreesFeatureCollection>('data/trees.geojson'),
     ]);
 
     renderRoads(layers, roads as unknown as GeoJSON.FeatureCollection);
     const graph = buildGraphFromRoads(roads);
-    startApp(graph, buildings, layers);
+    startApp(graph, buildings, trees, layers);
   } catch (err) {
     const sunInfo = document.getElementById('sun-info');
     if (sunInfo) {

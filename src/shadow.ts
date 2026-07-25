@@ -15,6 +15,16 @@ export interface BuildingsFeatureCollection {
   }>;
 }
 
+/** GeoJSON FeatureCollection of street trees, as loaded from data/trees.geojson. */
+export interface TreesFeatureCollection {
+  type: 'FeatureCollection';
+  features: Array<{
+    type: 'Feature';
+    geometry: { type: 'Point'; coordinates: [number, number] };
+    properties: { id: string; species: string; height: number; crownDiameter: number };
+  }>;
+}
+
 export interface ShadowPolygon {
   buildingId: string;
   polygon: Feature<Polygon>;
@@ -49,6 +59,33 @@ function shadowBearingDeg(azimuthDeg: number): number {
 }
 
 /**
+ * Projects every footprint vertex `shadowLength` meters away from the sun (in `bearing`
+ * direction), then takes the convex hull of the original + projected vertices. Shared by
+ * the building and tree-canopy shadow paths below, since neither cares what shape the
+ * source footprint is - only that it's a ring of [lon, lat] vertices.
+ */
+function projectFootprintShadow(
+  ring: [number, number][],
+  shadowLength: number,
+  bearing: number
+): Feature<Polygon> | null {
+  const points: [number, number][] = [];
+  for (const [lon0, lat0] of ring) {
+    points.push([lon0, lat0]);
+    const projected = turf.destination([lon0, lat0], shadowLength, bearing, { units: 'meters' });
+    points.push(projected.geometry.coordinates as [number, number]);
+  }
+
+  try {
+    const fc = turf.featureCollection(points.map((p) => turf.point(p)));
+    return turf.convex(fc);
+  } catch {
+    // degenerate geometry (e.g. collinear points) - no shadow for this footprint
+    return null;
+  }
+}
+
+/**
  * Builds one simplified shadow polygon per building: projects every footprint vertex
  * `height / tan(altitude)` meters away from the sun, then takes the convex hull of the
  * original + projected vertices. Returns an empty array when the sun is at/below the horizon.
@@ -73,22 +110,54 @@ export function computeShadows(
     const shadowLength = height / Math.tan(altitudeRad);
     if (!isFinite(shadowLength) || shadowLength <= 0) continue;
 
-    const ring = feature.geometry.coordinates[0]; // exterior ring, [lon, lat][]
-    const points: [number, number][] = [];
-    for (const [lon0, lat0] of ring) {
-      points.push([lon0, lat0]);
-      const projected = turf.destination([lon0, lat0], shadowLength, bearing, { units: 'meters' });
-      points.push(projected.geometry.coordinates as [number, number]);
+    const ring = feature.geometry.coordinates[0] as [number, number][]; // exterior ring, [lon, lat][]
+    const hull = projectFootprintShadow(ring, shadowLength, bearing);
+    if (hull) {
+      shadows.push({ buildingId: feature.properties.id, polygon: hull });
     }
+  }
 
-    try {
-      const fc = turf.featureCollection(points.map((p) => turf.point(p)));
-      const hull = turf.convex(fc);
-      if (hull) {
-        shadows.push({ buildingId: feature.properties.id, polygon: hull });
-      }
-    } catch {
-      // degenerate geometry (e.g. collinear points) - skip this building's shadow
+  return { shadows, sun };
+}
+
+/**
+ * Builds one simplified shadow polygon per street tree, using the same vertex-projection +
+ * convex-hull approach as computeShadows. Each tree's canopy footprint is approximated as a
+ * 12-sided polygon centered on the tree's point location, with radius = crownDiameter / 2
+ * (crownDiameter is a diameter, not a radius). Returns an empty array when the sun is at/below
+ * the horizon.
+ */
+export function computeTreeShadows(
+  trees: TreesFeatureCollection,
+  date: Date,
+  lat: number,
+  lon: number
+): { shadows: ShadowPolygon[]; sun: SunState } {
+  const sun = getSunState(date, lat, lon);
+  if (!sun.isDaylight) {
+    return { shadows: [], sun };
+  }
+
+  const altitudeRad = (sun.altitudeDeg * Math.PI) / 180;
+  const bearing = shadowBearingDeg(sun.azimuthDeg);
+  const shadows: ShadowPolygon[] = [];
+
+  for (const feature of trees.features) {
+    const { height, crownDiameter, id } = feature.properties;
+    const shadowLength = height / Math.tan(altitudeRad);
+    if (!isFinite(shadowLength) || shadowLength <= 0) continue;
+
+    const canopyRadius = crownDiameter / 2;
+    if (!isFinite(canopyRadius) || canopyRadius <= 0) continue;
+
+    const canopy = turf.circle(feature.geometry.coordinates, canopyRadius, {
+      steps: 12,
+      units: 'meters',
+    });
+    const ring = canopy.geometry.coordinates[0] as [number, number][];
+    const hull = projectFootprintShadow(ring, shadowLength, bearing);
+    if (hull) {
+      shadows.push({ buildingId: id, polygon: hull });
     }
   }
 

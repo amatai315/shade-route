@@ -4,7 +4,13 @@
 import type L from 'leaflet';
 import { OTEMACHI_CENTER, renderMarker, renderRoute, renderShadows, type MapLayers } from './map';
 import { RoadGraph } from './graph';
-import { computeShadows, type BuildingsFeatureCollection, type ShadowPolygon } from './shadow';
+import {
+  computeShadows,
+  computeTreeShadows,
+  type BuildingsFeatureCollection,
+  type ShadowPolygon,
+  type TreesFeatureCollection,
+} from './shadow';
 import { buildShadowGridIndex, computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
 import type { RouteResult } from './types';
 
@@ -42,6 +48,7 @@ function formatDateInput(d: Date): string {
 export function startApp(
   baseGraph: RoadGraph,
   buildings: BuildingsFeatureCollection,
+  trees: TreesFeatureCollection,
   layers: MapLayers
 ): void {
   const dateInput = byId<HTMLInputElement>('date-input');
@@ -69,7 +76,7 @@ export function startApp(
   legend.innerHTML = `
     <div class="legend-item"><span class="swatch swatch-shaded"></span>日陰優先ルート</div>
     <div class="legend-item"><span class="swatch swatch-shortest"></span>最短距離ルート</div>
-    <div class="legend-item"><span class="swatch swatch-shadow"></span>建物の影</div>
+    <div class="legend-item"><span class="swatch swatch-shadow"></span>建物・街路樹の影</div>
   `;
 
   // ---- state ----
@@ -166,8 +173,9 @@ export function startApp(
 
   function recomputeShadows(): void {
     const date = getSelectedDate();
-    const { shadows, sun } = computeShadows(buildings, date, OTEMACHI_CENTER[0], OTEMACHI_CENTER[1]);
-    currentShadows = shadows;
+    const { shadows: buildingShadows, sun } = computeShadows(buildings, date, OTEMACHI_CENTER[0], OTEMACHI_CENTER[1]);
+    const { shadows: treeShadows } = computeTreeShadows(trees, date, OTEMACHI_CENTER[0], OTEMACHI_CENTER[1]);
+    currentShadows = [...buildingShadows, ...treeShadows];
 
     if (!sun.isDaylight) {
       sunInfo.textContent = `太陽高度: ${sun.altitudeDeg.toFixed(1)}° (日没後/日の出前のため影なし)`;
