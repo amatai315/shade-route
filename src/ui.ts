@@ -12,7 +12,7 @@ import {
   type TreesFeatureCollection,
 } from './shadow';
 import { buildShadowGridIndex, computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
-import type { PlacesFeatureCollection, RouteResult } from './types';
+import type { PlacesFeatureCollection, RouteResult, SunState } from './types';
 
 const MAX_SEARCH_RESULTS = 20;
 
@@ -108,6 +108,7 @@ export function startApp(
   let startMarker: L.CircleMarker | null = null;
   let endMarker: L.CircleMarker | null = null;
   let currentShadows: ShadowPolygon[] = [];
+  let currentSun: SunState | null = null;
   let hasComputedRoute = false;
   let panelCollapsed = false;
   let routeInputsCollapsed = false;
@@ -265,6 +266,7 @@ export function startApp(
     const { shadows: buildingShadows, sun } = computeShadows(buildings, date, OTEMACHI_CENTER[0], OTEMACHI_CENTER[1]);
     const { shadows: treeShadows } = computeTreeShadows(trees, date, OTEMACHI_CENTER[0], OTEMACHI_CENTER[1]);
     currentShadows = [...buildingShadows, ...treeShadows];
+    currentSun = sun;
 
     if (!sun.isDaylight) {
       sunInfo.textContent = `太陽高度: ${sun.altitudeDeg.toFixed(1)}° (日没後/日の出前のため影なし)`;
@@ -401,7 +403,11 @@ export function startApp(
     // currentShadows set, so there's no need to re-index them separately.
     const shadowIndex = buildShadowGridIndex(currentShadows);
     const shadeFractions = computeEdgeShadeFractions(workingGraph, currentShadows, shadowIndex);
-    const { shortest, shaded } = computeRoutes(workingGraph, startInfo.nodeId, endInfo.nodeId, shadeFractions);
+    // No sun at all (night) means no edge can be in direct sunlight, so edges missing from
+    // shadeFractions (i.e. all of them, since shadows.length === 0 then) should read as fully
+    // shaded rather than the daytime default of fully sunny.
+    const defaultFraction = currentSun && !currentSun.isDaylight ? 1 : 0;
+    const { shortest, shaded } = computeRoutes(workingGraph, startInfo.nodeId, endInfo.nodeId, shadeFractions, defaultFraction);
 
     if (!shortest && !shaded) {
       showError('出発地と目的地の間にルートが見つかりませんでした。');

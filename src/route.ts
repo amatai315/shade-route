@@ -115,7 +115,7 @@ export function computeEdgeShadeFractions(
 ): Map<string, number> {
   const result = new Map<string, number>();
   if (shadows.length === 0) {
-    return result; // no shadows => everything is 0% shaded, callers treat missing key as 0
+    return result; // no shadows => callers apply their own default fraction to every edge
   }
 
   // Built once per call (shadow polygons don't change while we iterate all edges/samples),
@@ -274,14 +274,18 @@ function dijkstra(graph: RoadGraph, startId: string, endId: string, options: Dij
   return { nodeIds, edges };
 }
 
-function buildRouteResult(pathData: { nodeIds: string[]; edges: GraphEdge[] }, shadeFractions: Map<string, number>): RouteResult {
+function buildRouteResult(
+  pathData: { nodeIds: string[]; edges: GraphEdge[] },
+  shadeFractions: Map<string, number>,
+  defaultFraction = 0,
+): RouteResult {
   let totalDistance = 0;
   let shadedDistance = 0;
   const coordinates: [number, number][] = [];
 
   pathData.edges.forEach((edge, i) => {
     totalDistance += edge.distance;
-    const fraction = shadeFractions.get(edgeSignature(edge)) ?? 0;
+    const fraction = shadeFractions.get(edgeSignature(edge)) ?? defaultFraction;
     shadedDistance += edge.distance * fraction;
     if (i === 0) coordinates.push(edge.coords[0]);
     coordinates.push(edge.coords[1]);
@@ -301,19 +305,35 @@ export interface RoutePair {
   shaded: RouteResult | null;
 }
 
-/** Computes both the pure-shortest-distance route and the shade-preferring route. */
-export function computeRoutes(graph: RoadGraph, startId: string, endId: string, shadeFractions: Map<string, number>): RoutePair {
+/**
+ * Computes both the pure-shortest-distance route and the shade-preferring route.
+ *
+ * `defaultFraction` is the shaded-fraction assumed for edges missing from `shadeFractions`
+ * (which happens for every edge whenever `shadows.length === 0` upstream). Daytime with no
+ * nearby shadow geometry means "assume fully sunny" (0, the default); nighttime with no sun
+ * at all means "assume fully shaded" (1) - callers should pass 1 in that case. Note this only
+ * changes the reported shadeRatio, not which route is chosen: with an empty shadeFractions
+ * map every edge gets the same fallback, so the shaded-path weight function scales every edge
+ * by the same constant factor and ranks paths identically either way.
+ */
+export function computeRoutes(
+  graph: RoadGraph,
+  startId: string,
+  endId: string,
+  shadeFractions: Map<string, number>,
+  defaultFraction = 0,
+): RoutePair {
   const shortestPath = dijkstra(graph, startId, endId, { weightFn: (e) => e.distance });
   const shadedPath = dijkstra(graph, startId, endId, {
     weightFn: (e) => {
-      const fraction = shadeFractions.get(edgeSignature(e)) ?? 0;
+      const fraction = shadeFractions.get(edgeSignature(e)) ?? defaultFraction;
       const sunnyLength = e.distance * (1 - fraction);
       return e.distance + sunnyLength * SHADE_PENALTY_PER_METER;
     },
   });
 
   return {
-    shortest: shortestPath ? buildRouteResult(shortestPath, shadeFractions) : null,
-    shaded: shadedPath ? buildRouteResult(shadedPath, shadeFractions) : null,
+    shortest: shortestPath ? buildRouteResult(shortestPath, shadeFractions, defaultFraction) : null,
+    shaded: shadedPath ? buildRouteResult(shadedPath, shadeFractions, defaultFraction) : null,
   };
 }
