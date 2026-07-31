@@ -23,6 +23,8 @@ export interface GraphEdge {
   /** Great-circle distance in meters. */
   distance: number;
   highway: string;
+  /** True if this edge is indoor/underground (tunnel, indoor=yes, or negative layer) - no direct sunlight regardless of surface shadow geometry. */
+  indoorOrUnderground: boolean;
   /** Straight line geometry of this edge segment, [lon, lat] pairs (always 2 points). */
   coords: [[number, number], [number, number]];
 }
@@ -46,7 +48,7 @@ export interface RoadsFeatureCollection {
   features: Array<{
     type: 'Feature';
     geometry: { type: 'LineString'; coordinates: [number, number][] };
-    properties: { highway: string; id: number | string };
+    properties: { highway: string; id: number | string; indoor_or_underground: boolean };
   }>;
 }
 

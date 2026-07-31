@@ -114,8 +114,25 @@ export function computeEdgeShadeFractions(
   prebuiltIndex?: ShadowGridIndex,
 ): Map<string, number> {
   const result = new Map<string, number>();
+
+  // Indoor/underground edges are shaded by definition (no direct sunlight regardless of sun
+  // position or above-ground buildings), so they're recorded up front regardless of whether
+  // there are any shadow polygons to sample - this takes priority over both the normal
+  // sampling path below and the caller's defaultFraction fallback for the "no shadows" case.
+  const seen = new Set<string>();
+  for (const edges of graph.adjacency.values()) {
+    for (const edge of edges) {
+      const key = edgeSignature(edge);
+      if (seen.has(key)) continue;
+      if (edge.indoorOrUnderground) {
+        seen.add(key);
+        result.set(key, 1);
+      }
+    }
+  }
+
   if (shadows.length === 0) {
-    return result; // no shadows => callers apply their own default fraction to every edge
+    return result; // no shadows => callers apply their own default fraction to every remaining edge
   }
 
   // Built once per call (shadow polygons don't change while we iterate all edges/samples),
@@ -125,7 +142,6 @@ export function computeEdgeShadeFractions(
   // findShadowsAlongEdges) can pass it in via prebuiltIndex to avoid building it twice.
   const index = prebuiltIndex ?? buildShadowGridIndex(shadows);
 
-  const seen = new Set<string>();
   for (const edges of graph.adjacency.values()) {
     for (const edge of edges) {
       const key = edgeSignature(edge);

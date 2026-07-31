@@ -466,6 +466,19 @@ body {
   opacity: 0.5;
 }
 
+/* Dashed-line swatch (not a solid color) - matches the dashed line style used for
+   indoor/underground route segments on the map, since a plain color swatch alone
+   wouldn't convey "dashed". */
+.swatch-indoor {
+  background: repeating-linear-gradient(
+    to right,
+    #555555 0,
+    #555555 3px,
+    transparent 3px,
+    transparent 6px
+  );
+}
+
 .leaflet-control-attribution {
   font-size: 9px;
 }

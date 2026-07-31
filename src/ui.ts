@@ -98,6 +98,7 @@ export function startApp(
     <div class="legend-item"><span class="swatch swatch-shaded"></span>日陰優先ルート</div>
     <div class="legend-item"><span class="swatch swatch-shortest"></span>最短距離ルート</div>
     <div class="legend-item"><span class="swatch swatch-shadow"></span>建物・街路樹の影</div>
+    <div class="legend-item"><span class="swatch swatch-indoor"></span>地下・屋内区間(破線)</div>
   `;
 
   // ---- state ----

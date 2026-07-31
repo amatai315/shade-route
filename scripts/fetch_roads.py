@@ -40,6 +40,7 @@ HIGHWAY_VALUES = [
     "path",
     "steps",
     "service",
+    "corridor",
 ]
 
 QUERY = f"""
@@ -64,6 +65,26 @@ def haversine_m(lat1, lon1, lat2, lon2):
 
 def dist_from_center(lon, lat):
     return haversine_m(CENTER_LAT, CENTER_LON, lat, lon)
+
+
+def is_indoor_or_underground(tags):
+    """True if this way's tags indicate an indoor/underground pedestrian segment
+    (no direct sunlight regardless of surface shadow geometry): a `tunnel` tag
+    (any value), `indoor=yes`, or a negative `layer`.
+
+    `layer` values are sometimes non-numeric (e.g. a malformed or range-like
+    string) - a parse failure there must not itself flip the result to True,
+    it only falls back to whatever tunnel/indoor already determined.
+    """
+    result = "tunnel" in tags or tags.get("indoor") == "yes"
+    layer = tags.get("layer")
+    if layer is not None:
+        try:
+            if float(layer) < 0:
+                result = True
+        except ValueError:
+            pass
+    return result
 
 
 def clip_linestring(coords, radius=CLIP_RADIUS_M):
@@ -169,6 +190,7 @@ def main():
             continue
         tags = el.get("tags", {})
         highway = tags.get("highway", "unknown")
+        indoor_or_underground = is_indoor_or_underground(tags)
         coords = [[pt["lon"], pt["lat"]] for pt in geometry]
         if len(coords) < 2:
             continue
@@ -183,6 +205,7 @@ def main():
                     "properties": {
                         "highway": highway,
                         "id": el.get("id"),
+                        "indoor_or_underground": indoor_or_underground,
                     },
                 }
             )
@@ -200,6 +223,9 @@ def main():
     print("highway tag breakdown:")
     for k, v in sorted(highway_counts.items(), key=lambda kv: -kv[1]):
         print(f"  {k}: {v}")
+
+    indoor_or_underground_count = sum(1 for f in features if f["properties"]["indoor_or_underground"])
+    print(f"indoor_or_underground=True: {indoor_or_underground_count} / {len(features)} features")
 
     if len(features) == 0:
         print("WARNING: 0 road features - query or parsing is likely broken.")

@@ -4,7 +4,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import * as turf from '@turf/turf';
 import type { ShadowPolygon } from './shadow';
-import type { RouteResult } from './types';
+import type { GraphEdge, RouteResult } from './types';
 
 export const OTEMACHI_CENTER: L.LatLngTuple = [35.6862, 139.7671];
 
@@ -100,15 +100,46 @@ function toLatLngs(coords: [number, number][]): L.LatLngTuple[] {
   return coords.map(([lon, lat]) => [lat, lon]);
 }
 
+/** Dash pattern used for the indoor/underground portion of a rendered route - these segments
+ *  have no rendered shadow polygon backing their "shaded" classification (unlike surface
+ *  segments, which sit visibly under the gray shadow layer), so the line style itself needs
+ *  to signal why the segment counts as shaded. */
+const INDOOR_DASH_ARRAY = '6, 6';
+
+interface RouteSubSegment {
+  indoorOrUnderground: boolean;
+  coords: [number, number][];
+}
+
+/** Splits a route's edges into contiguous runs that share the same indoorOrUnderground value,
+ *  so each run can be drawn with its own line style while keeping edge-to-edge geometry intact. */
+function splitRouteSegments(edges: GraphEdge[]): RouteSubSegment[] {
+  const segments: RouteSubSegment[] = [];
+  let current: RouteSubSegment | null = null;
+  for (const edge of edges) {
+    if (!current || current.indoorOrUnderground !== edge.indoorOrUnderground) {
+      if (current) segments.push(current);
+      current = { indoorOrUnderground: edge.indoorOrUnderground, coords: [edge.coords[0], edge.coords[1]] };
+    } else {
+      current.coords.push(edge.coords[1]);
+    }
+  }
+  if (current) segments.push(current);
+  return segments;
+}
+
 export function renderRoute(layer: L.LayerGroup, route: RouteResult | null, color: string): void {
   layer.clearLayers();
   if (!route) return;
-  L.polyline(toLatLngs(route.coordinates), {
-    color,
-    weight: 5,
-    opacity: 0.85,
-    lineCap: 'round',
-  }).addTo(layer);
+  for (const segment of splitRouteSegments(route.edges)) {
+    L.polyline(toLatLngs(segment.coords), {
+      color,
+      weight: 5,
+      opacity: 0.85,
+      lineCap: 'round',
+      dashArray: segment.indoorOrUnderground ? INDOOR_DASH_ARRAY : undefined,
+    }).addTo(layer);
+  }
 }
 
 export type MarkerKind = 'start' | 'end';
