@@ -96,6 +96,19 @@ def element_category(tags):
     return None
 
 
+# `ref` is present on many unrelated element kinds in this dataset (station line codes like
+# "JY02", bus/rail stop numbers, even bank branch numbers on amenity=bank) - only
+# railway=subway_entrance's `ref` actually means "exit number" (e.g. "B4"). Extracting `ref`
+# unconditionally would mislabel those other refs as exit numbers downstream, so it's scoped
+# to this allowlist of entrance-like railway tag values (currently just subway_entrance; kept
+# as a set in case OSM data for other entrance-like tags shows up later).
+ENTRANCE_RAILWAY_VALUES = {"subway_entrance"}
+
+
+def is_entrance_ref(tags):
+    return tags.get("railway") in ENTRANCE_RAILWAY_VALUES and bool(tags.get("ref"))
+
+
 def main():
     refetch = "--refetch" in sys.argv
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -147,17 +160,26 @@ def main():
             skipped_out_of_radius += 1
             continue
 
+        properties = {
+            "id": f"place-{len(features)}",
+            "name": name,
+            "category": category,
+        }
+        # Only store `ref` for entrance-like elements (see is_entrance_ref) - omit the key
+        # entirely for everything else rather than writing null/"", matching how other
+        # optional fields in this codebase (e.g. GraphNode.synthetic, PointInfo.label in
+        # ui.ts) are modeled as TS `?:` optional properties rather than always-present
+        # nullable ones.
+        if is_entrance_ref(tags):
+            properties["ref"] = tags["ref"]
+
         feature = {
             "type": "Feature",
             "geometry": {
                 "type": "Point",
                 "coordinates": [lon, lat],
             },
-            "properties": {
-                "id": f"place-{len(features)}",
-                "name": name,
-                "category": category,
-            },
+            "properties": properties,
         }
         features.append(feature)
         category_counts[category] = category_counts.get(category, 0) + 1
@@ -170,9 +192,11 @@ def main():
     with open(OUT_PATH, "w", encoding="utf-8") as f:
         json.dump(fc, f, ensure_ascii=False)
 
+    entrance_ref_count = sum(1 for f in features if "ref" in f["properties"])
     print(f"Elements with a name tag: {with_name}")
     print(f"Skipped (center point beyond {RADIUS_M:.0f}m radius): {skipped_out_of_radius}")
     print(f"Wrote {len(features)} place features to {OUT_PATH}")
+    print(f"  of which subway/station entrance features with a ref (exit number): {entrance_ref_count}")
     print("category breakdown:")
     for k, v in sorted(category_counts.items(), key=lambda kv: -kv[1]):
         print(f"  {k}: {v}")

@@ -57,6 +57,11 @@ function summarizeFloorSequence(edges: GraphEdge[]): string[] {
   return labels;
 }
 
+/** A start/end point only counts as "at" an exit if it's within this many meters of it -
+ *  loose enough to cover snapping-to-road drift, tight enough that unrelated nearby exits
+ *  (e.g. a different line's entrance across the street) don't get misreported. */
+const NEAREST_EXIT_MAX_DISTANCE_M = 40;
+
 /** Which of the two input fields (if any) is currently waiting for the next map tap. */
 type ArmedField = 'start' | 'end' | null;
 
@@ -448,6 +453,29 @@ export function startApp(
     confirmSelectionAt(latlng.lat, latlng.lng);
   }
 
+  /** Finds the nearest subway/station-entrance place (one with a `ref`, e.g. "B4") within
+   *  NEAREST_EXIT_MAX_DISTANCE_M of (lat, lon), if any. Used to surface "最寄り出口: <name>
+   *  <ref>" next to the start/end point in the result panel. */
+  function findNearestExit(lat: number, lon: number): { name: string; ref: string } | null {
+    const point = L.latLng(lat, lon);
+    let best: { name: string; ref: string; dist: number } | null = null;
+    for (const feature of places.features) {
+      const ref = feature.properties.ref;
+      if (!ref) continue;
+      const dist = point.distanceTo(L.latLng(feature.geometry.coordinates[1], feature.geometry.coordinates[0]));
+      if (dist <= NEAREST_EXIT_MAX_DISTANCE_M && (!best || dist < best.dist)) {
+        best = { name: feature.properties.name, ref, dist };
+      }
+    }
+    return best ? { name: best.name, ref: best.ref } : null;
+  }
+
+  function formatNearestExitLine(label: string, point: PointInfo): string {
+    const exit = findNearestExit(point.lat, point.lon);
+    if (!exit) return '';
+    return `<div class="result-exit">${label}の最寄り出口: ${exit.name} ${exit.ref}</div>`;
+  }
+
   function formatRouteStats(label: string, route: RouteResult | null): string {
     if (!route) {
       return `<div class="result-item"><strong>${label}</strong>: ルートが見つかりませんでした</div>`;
@@ -497,8 +525,10 @@ export function startApp(
     const relevantShadows = findShadowsAlongEdges(routeEdges, currentShadows, shadowIndex);
     renderShadows(layers, relevantShadows);
 
+    const exitLines = formatNearestExitLine('出発地', startInfo) + formatNearestExitLine('目的地', endInfo);
+
     resultPanel.hidden = false;
-    resultPanel.innerHTML = formatRouteStats('日陰優先ルート', shaded) + formatRouteStats('最短距離ルート', shortest);
+    resultPanel.innerHTML = formatRouteStats('日陰優先ルート', shaded) + formatRouteStats('最短距離ルート', shortest) + exitLines;
     hasComputedRoute = true;
   }
 

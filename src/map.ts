@@ -4,7 +4,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import * as turf from '@turf/turf';
 import type { ShadowPolygon } from './shadow';
-import type { GraphEdge, RouteResult } from './types';
+import type { GraphEdge, PlacesFeatureCollection, RouteResult } from './types';
 
 export const OTEMACHI_CENTER: L.LatLngTuple = [35.6862, 139.7671];
 
@@ -16,6 +16,7 @@ export interface MapLayers {
   shadedRouteLayer: L.LayerGroup;
   markerLayer: L.LayerGroup;
   currentLocationLayer: L.LayerGroup;
+  exitMarkerLayer: L.LayerGroup;
 }
 
 export function initMap(containerId: string): MapLayers {
@@ -43,8 +44,18 @@ export function initMap(containerId: string): MapLayers {
   const shadedRouteLayer = L.layerGroup().addTo(map);
   const markerLayer = L.layerGroup().addTo(map);
   const currentLocationLayer = L.layerGroup().addTo(map);
+  const exitMarkerLayer = L.layerGroup().addTo(map);
 
-  return { map, roadsLayer, shadowLayer, shortestRouteLayer, shadedRouteLayer, markerLayer, currentLocationLayer };
+  return {
+    map,
+    roadsLayer,
+    shadowLayer,
+    shortestRouteLayer,
+    shadedRouteLayer,
+    markerLayer,
+    currentLocationLayer,
+    exitMarkerLayer,
+  };
 }
 
 export function renderRoads(layers: MapLayers, roadsGeoJson: GeoJSON.FeatureCollection): void {
@@ -156,6 +167,29 @@ export function renderMarker(layer: L.LayerGroup, kind: MarkerKind, lat: number,
     fillOpacity: 1,
   }).addTo(layer);
   return marker;
+}
+
+/** Renders every subway/station-entrance place feature that has a `ref` (exit number, e.g.
+ *  "B4") as a small numbered badge marker - a permanent map layer populated once at
+ *  startup, not gated behind route calculation. Unlike the shadow layer (meaningless
+ *  without a specific sun angle/route context), exit numbers are static wayfinding
+ *  infrastructure independent of any route, so they behave like the always-on roads
+ *  layer rather than the route-relevant-only shadow/route layers. Features without a
+ *  `ref` are skipped - an unnumbered badge would defeat the point of this layer. */
+export function renderExitMarkers(layer: L.LayerGroup, places: PlacesFeatureCollection): void {
+  layer.clearLayers();
+  for (const feature of places.features) {
+    const ref = feature.properties.ref;
+    if (!ref) continue;
+    const [lon, lat] = feature.geometry.coordinates;
+    const icon = L.divIcon({
+      className: 'exit-marker-icon',
+      html: `<span class="exit-marker-badge">${ref}</span>`,
+      iconSize: [24, 20],
+      iconAnchor: [12, 10],
+    });
+    L.marker([lat, lon], { icon }).bindPopup(feature.properties.name).addTo(layer);
+  }
 }
 
 // Distinct from both the green start marker and the red end/shortest-route color, and from

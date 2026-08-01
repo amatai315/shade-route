@@ -60,7 +60,9 @@ export interface PlacesFeatureCollection {
   features: Array<{
     type: 'Feature';
     geometry: { type: 'Point'; coordinates: [number, number] };
-    properties: { id: string; name: string; category: string };
+    /** `ref` (e.g. subway/station exit number like "B4") is only present on entrance-like
+     *  features (see scripts/fetch_places.py's is_entrance_ref) - unset for everything else. */
+    properties: { id: string; name: string; category: string; ref?: string };
   }>;
 }
 

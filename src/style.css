@@ -517,6 +517,12 @@ body {
   margin-top: 2px;
 }
 
+.result-exit {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-top: 2px;
+}
+
 .legend-row {
   display: flex;
   gap: 12px;
@@ -566,4 +572,25 @@ body {
 
 .leaflet-control-attribution {
   font-size: 9px;
+}
+
+/* Numbered subway/station exit badge (see renderExitMarkers in map.ts). Pill-shaped rather
+   than a fixed circle because ref values vary in length ("B4" vs "3b" vs "B10"). Orange is
+   used nowhere else on the map (start=green, end/shortest-route=red, shaded-route/accent=
+   blue, current-location=a different blue), so it reads as a distinct marker kind. */
+.exit-marker-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: 10px;
+  background: #f57c00;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  border: 2px solid #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
 }
