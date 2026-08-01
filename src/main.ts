@@ -1,5 +1,5 @@
 import './style.css';
-import { initMap, renderExitMarkers, renderRoads } from './map';
+import { initMap, renderRoads } from './map';
 import { buildGraphFromRoads } from './graph';
 import { startApp } from './ui';
 import type { BuildingsFeatureCollection, TreesFeatureCollection } from './shadow';
@@ -26,9 +26,8 @@ async function bootstrap(): Promise<void> {
     ]);
 
     renderRoads(layers, roads as unknown as GeoJSON.FeatureCollection);
-    // Exit markers are static wayfinding infrastructure, not route-relevant like the
-    // shadow layer - rendered once at startup as a permanent layer, same as the roads.
-    renderExitMarkers(layers.exitMarkerLayer, places);
+    // Exit markers are rendered per computed route (see runRouteCalculation in ui.ts),
+    // mirroring the shadow layer - not rendered here at startup.
     const graph = buildGraphFromRoads(roads);
     startApp(graph, buildings, trees, places, layers);
   } catch (err) {

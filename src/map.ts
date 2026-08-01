@@ -169,16 +169,15 @@ export function renderMarker(layer: L.LayerGroup, kind: MarkerKind, lat: number,
   return marker;
 }
 
-/** Renders every subway/station-entrance place feature that has a `ref` (exit number, e.g.
- *  "B4") as a small numbered badge marker - a permanent map layer populated once at
- *  startup, not gated behind route calculation. Unlike the shadow layer (meaningless
- *  without a specific sun angle/route context), exit numbers are static wayfinding
- *  infrastructure independent of any route, so they behave like the always-on roads
- *  layer rather than the route-relevant-only shadow/route layers. Features without a
- *  `ref` are skipped - an unnumbered badge would defeat the point of this layer. */
-export function renderExitMarkers(layer: L.LayerGroup, places: PlacesFeatureCollection): void {
+/** Renders the given subway/station-entrance place features (each expected to have a `ref`,
+ *  e.g. "B4") as small numbered badge markers. Like the shadow layer, this is route-relevant
+ *  only: callers are expected to pass just the subset of entrances near the currently
+ *  computed route (see `findExitsAlongEdges` in ui.ts), not the full places dataset - so the
+ *  layer is empty until a route exists and updates whenever the route is (re)computed,
+ *  instead of showing every entrance in the loaded area as permanent map clutter. */
+export function renderExitMarkers(layer: L.LayerGroup, features: PlacesFeatureCollection['features']): void {
   layer.clearLayers();
-  for (const feature of places.features) {
+  for (const feature of features) {
     const ref = feature.properties.ref;
     if (!ref) continue;
     const [lon, lat] = feature.geometry.coordinates;

@@ -2,7 +2,15 @@
 // shadow / graph / route modules.
 
 import L from 'leaflet';
-import { OTEMACHI_CENTER, renderCurrentLocation, renderMarker, renderRoute, renderShadows, type MapLayers } from './map';
+import {
+  OTEMACHI_CENTER,
+  renderCurrentLocation,
+  renderExitMarkers,
+  renderMarker,
+  renderRoute,
+  renderShadows,
+  type MapLayers,
+} from './map';
 import { RoadGraph } from './graph';
 import {
   computeShadows,
@@ -364,6 +372,7 @@ export function startApp(
     layers.shortestRouteLayer.clearLayers();
     layers.shadedRouteLayer.clearLayers();
     layers.shadowLayer.clearLayers();
+    layers.exitMarkerLayer.clearLayers();
     resultPanel.hidden = true;
     resultPanel.innerHTML = '';
     hasComputedRoute = false;
@@ -422,6 +431,7 @@ export function startApp(
     layers.shortestRouteLayer.clearLayers();
     layers.shadedRouteLayer.clearLayers();
     layers.shadowLayer.clearLayers();
+    layers.exitMarkerLayer.clearLayers();
     resultPanel.hidden = true;
     resultPanel.innerHTML = '';
     setArmed(null);
@@ -478,6 +488,28 @@ export function startApp(
     return best ? { name: best.name, ref: best.ref } : null;
   }
 
+  /** Returns the subset of ref-bearing entrance features (places.geojson) that lie within
+   *  NEAREST_EXIT_MAX_DISTANCE_M of any endpoint of the given route edges. Mirrors
+   *  findShadowsAlongEdges's role for the shadow layer: the exit-marker map layer, like the
+   *  shadow layer, should only ever show what's relevant to the just-computed route rather
+   *  than every entrance in the loaded area (~86 features here, so a plain per-edge-endpoint
+   *  scan is fine - no need for a spatial index like the shadow grid). Reuses
+   *  NEAREST_EXIT_MAX_DISTANCE_M so this agrees with findNearestExit on what counts as
+   *  "near" a point. */
+  function findExitsAlongEdges(edges: GraphEdge[]): PlacesFeatureCollection['features'] {
+    if (edges.length === 0) return [];
+    const endpoints: L.LatLng[] = [];
+    for (const edge of edges) {
+      endpoints.push(L.latLng(edge.coords[0][1], edge.coords[0][0]));
+      endpoints.push(L.latLng(edge.coords[1][1], edge.coords[1][0]));
+    }
+    return places.features.filter((feature) => {
+      if (!feature.properties.ref) return false;
+      const point = L.latLng(feature.geometry.coordinates[1], feature.geometry.coordinates[0]);
+      return endpoints.some((ep) => ep.distanceTo(point) <= NEAREST_EXIT_MAX_DISTANCE_M);
+    });
+  }
+
   function formatNearestExitLine(label: string, point: PointInfo): string {
     const exit = findNearestExit(point.lat, point.lon);
     if (!exit) return '';
@@ -522,6 +554,7 @@ export function startApp(
       layers.shortestRouteLayer.clearLayers();
       layers.shadedRouteLayer.clearLayers();
       layers.shadowLayer.clearLayers();
+      layers.exitMarkerLayer.clearLayers();
       resultPanel.hidden = true;
       return;
     }
@@ -532,6 +565,7 @@ export function startApp(
     const routeEdges = [...(shortest?.edges ?? []), ...(shaded?.edges ?? [])];
     const relevantShadows = findShadowsAlongEdges(routeEdges, currentShadows, shadowIndex);
     renderShadows(layers, relevantShadows);
+    renderExitMarkers(layers.exitMarkerLayer, findExitsAlongEdges(routeEdges));
 
     const exitLines = formatNearestExitLine('出発地', startInfo) + formatNearestExitLine('目的地', endInfo);
 
