@@ -25,6 +25,8 @@ export interface GraphEdge {
   highway: string;
   /** True if this edge is indoor/underground (tunnel, indoor=yes, or negative layer) - no direct sunlight regardless of surface shadow geometry. */
   indoorOrUnderground: boolean;
+  /** OSM `layer` value (0 = surface, negative = below ground, e.g. -1 = B1F). */
+  layer: number;
   /** Straight line geometry of this edge segment, [lon, lat] pairs (always 2 points). */
   coords: [[number, number], [number, number]];
 }
@@ -48,7 +50,7 @@ export interface RoadsFeatureCollection {
   features: Array<{
     type: 'Feature';
     geometry: { type: 'LineString'; coordinates: [number, number][] };
-    properties: { highway: string; id: number | string; indoor_or_underground: boolean };
+    properties: { highway: string; id: number | string; indoor_or_underground: boolean; layer: number };
   }>;
 }
 

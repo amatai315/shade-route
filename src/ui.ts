@@ -12,7 +12,7 @@ import {
   type TreesFeatureCollection,
 } from './shadow';
 import { buildShadowGridIndex, computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
-import type { CurrentPosition, PlacesFeatureCollection, RouteResult, SunState } from './types';
+import type { CurrentPosition, GraphEdge, PlacesFeatureCollection, RouteResult, SunState } from './types';
 
 const MAX_SEARCH_RESULTS = 20;
 
@@ -27,6 +27,34 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 function categoryLabel(category: string): string {
   return CATEGORY_LABELS[category] ?? category;
+}
+
+const SURFACE_LABEL = '地上';
+
+/** Positive `layer` values are rare in this pedestrian-path dataset (~20 features, mostly
+ *  footbridges/decks) and OSM doesn't give them the same "Nth basement" meaning negative
+ *  layers have, so this is a best-effort label rather than a precise floor number. */
+function floorLabel(layer: number): string {
+  if (layer === 0) return SURFACE_LABEL;
+  if (layer < 0) return `地下${-layer}階`;
+  return `${layer + 1}階`;
+}
+
+/** Walks a route's edges in order and collapses consecutive same-layer runs into one label
+ *  each, e.g. surface -> B1 -> B2 -> surface yields ["地上", "地下1階", "地下2階", "地上"]
+ *  rather than one entry per edge. Mirrors the contiguous-run grouping map.ts's
+ *  splitRouteSegments uses for the dashed indoor/underground line rendering, keyed on
+ *  `layer` instead of `indoorOrUnderground`. */
+function summarizeFloorSequence(edges: GraphEdge[]): string[] {
+  const labels: string[] = [];
+  let currentLayer: number | null = null;
+  for (const edge of edges) {
+    if (currentLayer === null || currentLayer !== edge.layer) {
+      labels.push(floorLabel(edge.layer));
+      currentLayer = edge.layer;
+    }
+  }
+  return labels;
 }
 
 /** Which of the two input fields (if any) is currently waiting for the next map tap. */
@@ -425,7 +453,15 @@ export function startApp(
       return `<div class="result-item"><strong>${label}</strong>: ルートが見つかりませんでした</div>`;
     }
     const pct = (route.shadeRatio * 100).toFixed(0);
-    return `<div class="result-item"><strong>${label}</strong>: ${route.distanceMeters.toFixed(0)} m / 日陰率 ${pct}%</div>`;
+    const floors = summarizeFloorSequence(route.edges);
+    // A route that never leaves the surface produces a single "地上" entry - that's not
+    // worth a line of its own, so only render the sequence when it's informative (more
+    // than one leg, or the whole route sits below/above ground).
+    const floorLine =
+      floors.length > 1 || floors[0] !== SURFACE_LABEL
+        ? `<div class="result-floor">経路: ${floors.join(' → ')}</div>`
+        : '';
+    return `<div class="result-item"><strong>${label}</strong>: ${route.distanceMeters.toFixed(0)} m / 日陰率 ${pct}%${floorLine}</div>`;
   }
 
   function runRouteCalculation(): void {

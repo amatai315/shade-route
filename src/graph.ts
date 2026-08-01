@@ -36,6 +36,7 @@ export class RoadGraph {
     distance: number,
     highway: string,
     indoorOrUnderground: boolean,
+    layer: number,
     coords: [[number, number], [number, number]],
   ): GraphEdge {
     const edge: GraphEdge = {
@@ -45,6 +46,7 @@ export class RoadGraph {
       distance,
       highway,
       indoorOrUnderground,
+      layer,
       coords,
     };
     this.adjacency.get(fromId)!.push(edge);
@@ -52,17 +54,17 @@ export class RoadGraph {
   }
 
   /** Adds a bidirectional edge between two existing nodes. */
-  addSegment(aId: string, bId: string, highway: string, indoorOrUnderground: boolean): void {
+  addSegment(aId: string, bId: string, highway: string, indoorOrUnderground: boolean, layer: number): void {
     const a = this.nodes.get(aId)!;
     const b = this.nodes.get(bId)!;
     if (aId === bId) return; // zero-length / duplicate vertex, skip
     const distance = turf.distance([a.lon, a.lat], [b.lon, b.lat], { units: 'meters' });
     if (distance < 0.05) return; // ignore near-duplicate points
-    const forward = this.addDirected(aId, bId, distance, highway, indoorOrUnderground, [
+    const forward = this.addDirected(aId, bId, distance, highway, indoorOrUnderground, layer, [
       [a.lon, a.lat],
       [b.lon, b.lat],
     ]);
-    const backward = this.addDirected(bId, aId, distance, highway, indoorOrUnderground, [
+    const backward = this.addDirected(bId, aId, distance, highway, indoorOrUnderground, layer, [
       [b.lon, b.lat],
       [a.lon, a.lat],
     ]);
@@ -101,19 +103,19 @@ export class RoadGraph {
     this.nodes.set(newId, { id: newId, lat: atLat, lon: atLon, synthetic: true });
     this.adjacency.set(newId, []);
 
-    const aToS = this.addDirected(aId, newId, distToA, fwd.highway, fwd.indoorOrUnderground, [
+    const aToS = this.addDirected(aId, newId, distToA, fwd.highway, fwd.indoorOrUnderground, fwd.layer, [
       [a.lon, a.lat],
       [atLon, atLat],
     ]);
-    const sToA = this.addDirected(newId, aId, distToA, fwd.highway, fwd.indoorOrUnderground, [
+    const sToA = this.addDirected(newId, aId, distToA, fwd.highway, fwd.indoorOrUnderground, fwd.layer, [
       [atLon, atLat],
       [a.lon, a.lat],
     ]);
-    const sToB = this.addDirected(newId, bId, distToB, fwd.highway, fwd.indoorOrUnderground, [
+    const sToB = this.addDirected(newId, bId, distToB, fwd.highway, fwd.indoorOrUnderground, fwd.layer, [
       [atLon, atLat],
       [b.lon, b.lat],
     ]);
-    const bToS = this.addDirected(bId, newId, distToB, fwd.highway, fwd.indoorOrUnderground, [
+    const bToS = this.addDirected(bId, newId, distToB, fwd.highway, fwd.indoorOrUnderground, fwd.layer, [
       [b.lon, b.lat],
       [atLon, atLat],
     ]);
@@ -178,11 +180,12 @@ export function buildGraphFromRoads(geojson: RoadsFeatureCollection): RoadGraph 
     const coords = feature.geometry.coordinates;
     const highway = feature.properties.highway;
     const indoorOrUnderground = feature.properties.indoor_or_underground;
+    const layer = feature.properties.layer;
     let prevId: string | null = null;
     for (const [lon, lat] of coords) {
       const id = graph.ensureNode(lon, lat);
       if (prevId !== null) {
-        graph.addSegment(prevId, id, highway, indoorOrUnderground);
+        graph.addSegment(prevId, id, highway, indoorOrUnderground, layer);
       }
       prevId = id;
     }

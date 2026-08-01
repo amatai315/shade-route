@@ -87,6 +87,21 @@ def is_indoor_or_underground(tags):
     return result
 
 
+def parse_layer(tags):
+    """Integer `layer` value for this way, defaulting to 0 (surface level) when the
+    tag is absent or fails to parse - same defensive parse-failure-safe pattern as
+    is_indoor_or_underground's own `layer` handling above, just keeping the number
+    instead of collapsing it to a boolean.
+    """
+    layer = tags.get("layer")
+    if layer is not None:
+        try:
+            return int(float(layer))
+        except ValueError:
+            pass
+    return 0
+
+
 def clip_linestring(coords, radius=CLIP_RADIUS_M):
     """Clip a line (list of [lon, lat] pairs) down to the portions that lie
     within `radius` meters of the station center, splitting it into multiple
@@ -191,6 +206,7 @@ def main():
         tags = el.get("tags", {})
         highway = tags.get("highway", "unknown")
         indoor_or_underground = is_indoor_or_underground(tags)
+        layer = parse_layer(tags)
         coords = [[pt["lon"], pt["lat"]] for pt in geometry]
         if len(coords) < 2:
             continue
@@ -206,6 +222,7 @@ def main():
                         "highway": highway,
                         "id": el.get("id"),
                         "indoor_or_underground": indoor_or_underground,
+                        "layer": layer,
                     },
                 }
             )
@@ -226,6 +243,14 @@ def main():
 
     indoor_or_underground_count = sum(1 for f in features if f["properties"]["indoor_or_underground"])
     print(f"indoor_or_underground=True: {indoor_or_underground_count} / {len(features)} features")
+
+    layer_counts = {}
+    for f in features:
+        layer = f["properties"]["layer"]
+        layer_counts[layer] = layer_counts.get(layer, 0) + 1
+    print("layer value breakdown:")
+    for k, v in sorted(layer_counts.items()):
+        print(f"  {k}: {v}")
 
     if len(features) == 0:
         print("WARNING: 0 road features - query or parsing is likely broken.")
