@@ -76,6 +76,14 @@ function byId<T extends HTMLElement>(id: string): T {
   return el as T;
 }
 
+/** Escapes OSM-sourced text (place names, refs) before interpolating into an innerHTML
+ *  template string, so it's never misread as markup. */
+function escapeHtml(text: string): string {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 interface PointInfo {
   nodeId: string;
   lat: number;
@@ -473,7 +481,7 @@ export function startApp(
   function formatNearestExitLine(label: string, point: PointInfo): string {
     const exit = findNearestExit(point.lat, point.lon);
     if (!exit) return '';
-    return `<div class="result-exit">${label}の最寄り出口: ${exit.name} ${exit.ref}</div>`;
+    return `<div class="result-exit">${label}の最寄り出口: ${escapeHtml(exit.name)} ${escapeHtml(exit.ref)}</div>`;
   }
 
   function formatRouteStats(label: string, route: RouteResult | null): string {
