@@ -458,7 +458,7 @@ export function startApp(
     // worth a line of its own, so only render the sequence when it's informative (more
     // than one leg, or the whole route sits below/above ground).
     const floorLine =
-      floors.length > 1 || floors[0] !== SURFACE_LABEL
+      floors.length > 1 || (floors.length === 1 && floors[0] !== SURFACE_LABEL)
         ? `<div class="result-floor">経路: ${floors.join(' → ')}</div>`
         : '';
     return `<div class="result-item"><strong>${label}</strong>: ${route.distanceMeters.toFixed(0)} m / 日陰率 ${pct}%${floorLine}</div>`;
