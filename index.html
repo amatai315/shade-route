@@ -11,7 +11,17 @@
   </head>
   <body>
     <div id="app">
-      <div id="map"></div>
+      <div id="map">
+        <button
+          type="button"
+          id="locate-button"
+          class="locate-button"
+          data-state="off"
+          aria-label="現在地を表示"
+        >
+          <span class="locate-icon" aria-hidden="true"></span>
+        </button>
+      </div>
 
       <div id="route-inputs" class="route-inputs">
         <div class="route-inputs-header">

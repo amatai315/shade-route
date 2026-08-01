@@ -67,3 +67,14 @@ export interface SunState {
   azimuthDeg: number;
   isDaylight: boolean;
 }
+
+/** The user's current position, however it was obtained. `source` is kept open-ended
+ *  (rather than hardcoding a GPS-specific shape) so a future non-GPS positioning method
+ *  (e.g. indoor photo-based estimation) could feed the same concept without a rewrite here. */
+export interface CurrentPosition {
+  lat: number;
+  lon: number;
+  /** Accuracy radius in meters, if known. */
+  accuracy: number;
+  source: 'gps';
+}

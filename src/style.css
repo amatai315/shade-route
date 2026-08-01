@@ -271,6 +271,84 @@ body {
   color: var(--color-muted);
 }
 
+.route-search-current-location {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.route-search-current-location::before {
+  content: '';
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px var(--color-accent);
+  background: var(--color-accent);
+}
+
+/* Floating "locate me" control, bottom-right of the map viewport. Positioned relative to
+   #map (which Leaflet makes position:relative) rather than #app, so it tracks the map's
+   actual visible height as the bottom panel collapses/expands, and stays clear of the
+   top-left route-inputs card and the top-right Leaflet zoom control. */
+.locate-button {
+  position: absolute;
+  right: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  z-index: 1000;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-panel);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.locate-icon {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-muted);
+  border-radius: 50%;
+  position: relative;
+}
+
+.locate-icon::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--color-muted);
+}
+
+/* following: actively auto-recentering - button reads as "on and driving the map". */
+.locate-button[data-state='following'] {
+  background: var(--color-accent);
+}
+
+.locate-button[data-state='following'] .locate-icon {
+  border-color: #fff;
+}
+
+.locate-button[data-state='following'] .locate-icon::after {
+  background: #fff;
+}
+
+/* trackingNotFollowing: still tracking (marker keeps updating) but the user panned away,
+   so auto-recenter is paused - visually distinct from both off (gray) and following
+   (solid accent fill): neutral background, accent-colored icon. */
+.locate-button[data-state='trackingNotFollowing'] .locate-icon {
+  border-color: var(--color-accent);
+}
+
+.locate-button[data-state='trackingNotFollowing'] .locate-icon::after {
+  background: var(--color-accent);
+}
+
 #panel {
   flex: 0 0 auto;
   max-height: 46vh;

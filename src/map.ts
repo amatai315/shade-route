@@ -15,6 +15,7 @@ export interface MapLayers {
   shortestRouteLayer: L.LayerGroup;
   shadedRouteLayer: L.LayerGroup;
   markerLayer: L.LayerGroup;
+  currentLocationLayer: L.LayerGroup;
 }
 
 export function initMap(containerId: string): MapLayers {
@@ -41,8 +42,9 @@ export function initMap(containerId: string): MapLayers {
   const shortestRouteLayer = L.layerGroup().addTo(map);
   const shadedRouteLayer = L.layerGroup().addTo(map);
   const markerLayer = L.layerGroup().addTo(map);
+  const currentLocationLayer = L.layerGroup().addTo(map);
 
-  return { map, roadsLayer, shadowLayer, shortestRouteLayer, shadedRouteLayer, markerLayer };
+  return { map, roadsLayer, shadowLayer, shortestRouteLayer, shadedRouteLayer, markerLayer, currentLocationLayer };
 }
 
 export function renderRoads(layers: MapLayers, roadsGeoJson: GeoJSON.FeatureCollection): void {
@@ -154,4 +156,32 @@ export function renderMarker(layer: L.LayerGroup, kind: MarkerKind, lat: number,
     fillOpacity: 1,
   }).addTo(layer);
   return marker;
+}
+
+// Distinct from both the green start marker and the red end/shortest-route color, and from
+// the darker blue already used for the shaded-route line, so all three read as separate
+// things when a route and a live GPS fix are on screen together.
+const CURRENT_LOCATION_COLOR = '#4285f4';
+
+/** Draws the live GPS fix as a small solid dot plus a semi-transparent accuracy circle
+ *  (radius in meters, per `L.circle`'s default unit). Mirrors `renderMarker`'s
+ *  clear-then-draw-into-a-dedicated-layer convention so it can be redrawn independently
+ *  of the start/end markers on every position update. */
+export function renderCurrentLocation(layer: L.LayerGroup, lat: number, lon: number, accuracy: number): void {
+  layer.clearLayers();
+  L.circle([lat, lon], {
+    radius: accuracy,
+    color: CURRENT_LOCATION_COLOR,
+    weight: 1,
+    opacity: 0.4,
+    fillColor: CURRENT_LOCATION_COLOR,
+    fillOpacity: 0.15,
+  }).addTo(layer);
+  L.circleMarker([lat, lon], {
+    radius: 7,
+    color: '#ffffff',
+    weight: 2,
+    fillColor: CURRENT_LOCATION_COLOR,
+    fillOpacity: 1,
+  }).addTo(layer);
 }

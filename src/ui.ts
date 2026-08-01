@@ -2,7 +2,7 @@
 // shadow / graph / route modules.
 
 import L from 'leaflet';
-import { OTEMACHI_CENTER, renderMarker, renderRoute, renderShadows, type MapLayers } from './map';
+import { OTEMACHI_CENTER, renderCurrentLocation, renderMarker, renderRoute, renderShadows, type MapLayers } from './map';
 import { RoadGraph } from './graph';
 import {
   computeShadows,
@@ -12,7 +12,7 @@ import {
   type TreesFeatureCollection,
 } from './shadow';
 import { buildShadowGridIndex, computeEdgeShadeFractions, computeRoutes, findShadowsAlongEdges } from './route';
-import type { PlacesFeatureCollection, RouteResult, SunState } from './types';
+import type { CurrentPosition, PlacesFeatureCollection, RouteResult, SunState } from './types';
 
 const MAX_SEARCH_RESULTS = 20;
 
@@ -31,6 +31,11 @@ function categoryLabel(category: string): string {
 
 /** Which of the two input fields (if any) is currently waiting for the next map tap. */
 type ArmedField = 'start' | 'end' | null;
+
+/** off: not tracking. following: tracking + map auto-recenters on every fix. trackingNotFollowing:
+ *  still tracking (marker keeps updating) but the user dragged the map away, so auto-recenter
+ *  is paused until they tap the locate button again. */
+type LocateState = 'off' | 'following' | 'trackingNotFollowing';
 
 function byId<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -93,6 +98,7 @@ export function startApp(
   const panelToggle = byId<HTMLButtonElement>('panel-toggle');
   const routeInputs = byId<HTMLDivElement>('route-inputs');
   const routeInputsToggle = byId<HTMLButtonElement>('route-inputs-toggle');
+  const locateButton = byId<HTMLButtonElement>('locate-button');
 
   legend.innerHTML = `
     <div class="legend-item"><span class="swatch swatch-shaded"></span>日陰優先ルート</div>
@@ -113,6 +119,9 @@ export function startApp(
   let hasComputedRoute = false;
   let panelCollapsed = false;
   let routeInputsCollapsed = false;
+  let locateState: LocateState = 'off';
+  let watchId: number | null = null;
+  let currentPosition: CurrentPosition | null = null;
 
   function showError(msg: string | null): void {
     if (!msg) {
@@ -175,15 +184,41 @@ export function startApp(
 
     // The results list only makes sense while a field is armed - always clear its contents
     // here so no stale query/results survive into the next arm cycle or linger after disarm.
+    // Re-rendering (rather than just clearing) when arming lets the "use current location"
+    // option appear immediately, before the user types anything.
     routeSearchResults.hidden = !field;
-    routeSearchResults.innerHTML = '';
+    if (field) {
+      renderSearchResults('');
+    } else {
+      routeSearchResults.innerHTML = '';
+    }
+  }
+
+  /** "Use current GPS fix" quick action, shown above the filtered place matches. Reuses
+   *  confirmSelectionAt exactly like a map tap or a search result - it's just a third way
+   *  to supply a point, not a separate confirm path. No label, so the field falls back to
+   *  showing coordinates, same as a map-tap selection (a GPS fix isn't a named place). */
+  function buildUseCurrentLocationButton(): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'route-search-result route-search-current-location';
+    button.textContent = '現在地を使う';
+    button.addEventListener('click', () => {
+      if (!currentPosition) return;
+      confirmSelectionAt(currentPosition.lat, currentPosition.lon);
+    });
+    return button;
   }
 
   /** Renders up to MAX_SEARCH_RESULTS places matching `query` (case-insensitive substring),
-   *  nearest-to-map-center first. Each result is a button that runs the same confirm path
+   *  nearest-to-map-center first, plus the "use current location" option (if a fix is
+   *  available) pinned above them. Each result is a button that runs the same confirm path
    *  as a map tap. */
   function renderSearchResults(query: string): void {
     routeSearchResults.innerHTML = '';
+    if (armedField && currentPosition) {
+      routeSearchResults.appendChild(buildUseCurrentLocationButton());
+    }
     const trimmed = query.trim();
     if (!trimmed) return;
 
@@ -431,6 +466,110 @@ export function startApp(
     hasComputedRoute = true;
   }
 
+  /** Re-renders the armed field's search results so the "use current location" option
+   *  appears/disappears immediately as a GPS fix arrives or tracking stops, without
+   *  discarding whatever the user has already typed. */
+  function refreshArmedSearchResults(): void {
+    if (!armedField) return;
+    const input = armedField === 'start' ? fieldStartInput : fieldEndInput;
+    renderSearchResults(input.value);
+  }
+
+  function setLocateState(state: LocateState): void {
+    locateState = state;
+    locateButton.dataset.state = state;
+    const labels: Record<LocateState, string> = {
+      off: '現在地を表示',
+      following: '現在地に追従中',
+      trackingNotFollowing: '現在地に戻る',
+    };
+    locateButton.setAttribute('aria-label', labels[state]);
+  }
+
+  /** Position-update handler for the live GPS watch. Deliberately narrow: it only ever
+   *  touches the current-location marker and (while following) the map's pan position -
+   *  never the route/graph/shade state. Moving GPS position must never trigger a
+   *  route recalculation, even if a route is already on screen. */
+  function handlePositionUpdate(position: GeolocationPosition): void {
+    currentPosition = {
+      lat: position.coords.latitude,
+      lon: position.coords.longitude,
+      accuracy: position.coords.accuracy,
+      source: 'gps',
+    };
+    renderCurrentLocation(layers.currentLocationLayer, currentPosition.lat, currentPosition.lon, currentPosition.accuracy);
+    if (locateState === 'following') {
+      // panTo (like setView) is programmatic and never fires Leaflet's 'dragstart' event,
+      // which is what lets the dragstart listener below reliably tell "map moved because
+      // we're following GPS" apart from "map moved because the user dragged it".
+      layers.map.panTo([currentPosition.lat, currentPosition.lon]);
+    }
+    refreshArmedSearchResults();
+  }
+
+  function handlePositionError(err: GeolocationPositionError): void {
+    const messages: Record<number, string> = {
+      1: '位置情報の利用が許可されていません。端末の設定を確認してください。',
+      2: '現在地を取得できませんでした。電波状況を確認してください。',
+      3: '現在地の取得がタイムアウトしました。',
+    };
+    showError(messages[err.code] ?? '現在地を取得できませんでした。');
+    stopTracking();
+  }
+
+  function stopTracking(): void {
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
+    currentPosition = null;
+    layers.currentLocationLayer.clearLayers();
+    setLocateState('off');
+    refreshArmedSearchResults();
+  }
+
+  function startTracking(): void {
+    if (!('geolocation' in navigator)) {
+      showError('この端末は位置情報の取得に対応していません。');
+      return;
+    }
+    showError(null);
+    // following is set before the first fix arrives (not after) so that fix's own
+    // handlePositionUpdate call - which centers the map only when locateState is
+    // 'following' - performs the required "center on first fix" behavior with no
+    // separate first-fix special case.
+    setLocateState('following');
+    watchId = navigator.geolocation.watchPosition(handlePositionUpdate, handlePositionError, {
+      enableHighAccuracy: true,
+    });
+  }
+
+  locateButton.addEventListener('click', (e: MouseEvent) => {
+    // The button lives inside the Leaflet map container (so it can be positioned/sized
+    // relative to the actual map viewport), so without this the click would also bubble
+    // up to the map's own 'click' handler and be misread as a map-tap point selection.
+    e.stopPropagation();
+    if (locateState === 'off') {
+      startTracking();
+      return;
+    }
+    // following or trackingNotFollowing: re-center on the latest known fix and
+    // (re-)transition to following.
+    if (currentPosition) {
+      layers.map.panTo([currentPosition.lat, currentPosition.lon]);
+    }
+    setLocateState('following');
+  });
+
+  layers.map.on('dragstart', () => {
+    // dragstart only fires for user-initiated dragging, never for the programmatic
+    // panTo/setView calls used above - so this is a reliable "the user took the map back"
+    // signal, unlike a generic movestart/moveend listener which would fire for both.
+    if (locateState === 'following') {
+      setLocateState('trackingNotFollowing');
+    }
+  });
+
   // ---- wire up events ----
   layers.map.on('click', (e: L.LeafletMouseEvent) => handleMapClick(e.latlng));
 
@@ -511,5 +650,6 @@ export function startApp(
   updateRouteButtonState();
   setPanelCollapsed(false);
   setRouteInputsCollapsed(false);
+  setLocateState('off');
   recomputeShadows();
 }
