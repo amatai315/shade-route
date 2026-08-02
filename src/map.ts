@@ -211,6 +211,13 @@ export function setRouteSegmentDimmed(polyline: L.Polyline, dimmed: boolean): vo
   polyline.setStyle({ opacity: dimmed ? ROUTE_SEGMENT_DIMMED_OPACITY : ROUTE_SEGMENT_NORMAL_OPACITY });
 }
 
+/** Dims/undims one exit marker for the floor-toggle badge (see ui.ts) - same opacity values
+ *  as setRouteSegmentDimmed so the marker and the route segment it sits next to read as
+ *  consistently "de-emphasized" or "focused" together. */
+export function setExitMarkerDimmed(marker: L.Marker, dimmed: boolean): void {
+  marker.setOpacity(dimmed ? ROUTE_SEGMENT_DIMMED_OPACITY : ROUTE_SEGMENT_NORMAL_OPACITY);
+}
+
 export type MarkerKind = 'start' | 'end';
 
 export function renderMarker(layer: L.LayerGroup, kind: MarkerKind, lat: number, lon: number): L.CircleMarker {
@@ -225,16 +232,34 @@ export function renderMarker(layer: L.LayerGroup, kind: MarkerKind, lat: number,
   return marker;
 }
 
-/** Renders the given subway/station-entrance place features (each expected to have a `ref`,
- *  e.g. "B4") as small numbered badge markers. Like the shadow layer, this is route-relevant
- *  only: callers are expected to pass just the subset of entrances that sit at a genuine
+/** One entrance feature plus the set of `layer` values (surface=0, underground negative) it's
+ *  relevant to - i.e. every layer that appears on either side of a floor-transition boundary
+ *  this feature was matched to (see `findExitsAtTransitions` in ui.ts). A feature matched to
+ *  more than one transition point carries the union of all of them. */
+export interface ExitMarkerFeatureInput {
+  feature: PlacesFeatureCollection['features'][number];
+  relevantLayers: Set<number>;
+}
+
+/** A single rendered exit marker with the relevant-layers info it was drawn from, mirroring
+ *  RouteRenderSegment: returned so callers (ui.ts's floor badge) can independently dim/undim
+ *  it later without re-rendering the whole marker set. */
+export interface ExitMarkerRenderResult {
+  relevantLayers: Set<number>;
+  marker: L.Marker;
+}
+
+/** Renders the given subway/station-entrance features (each expected to have a `ref`, e.g.
+ *  "B4") as small numbered badge markers. Like the shadow layer, this is route-relevant only:
+ *  callers are expected to pass just the subset of entrances that sit at a genuine
  *  floor-transition point on the currently computed route (see `findExitsAtTransitions` in
  *  ui.ts), not the full places dataset - so the layer is empty until a route exists and
  *  updates whenever the route is (re)computed, instead of showing every entrance in the
  *  loaded area as permanent map clutter. */
-export function renderExitMarkers(layer: L.LayerGroup, features: PlacesFeatureCollection['features']): void {
+export function renderExitMarkers(layer: L.LayerGroup, entries: ExitMarkerFeatureInput[]): ExitMarkerRenderResult[] {
   layer.clearLayers();
-  for (const feature of features) {
+  const rendered: ExitMarkerRenderResult[] = [];
+  for (const { feature, relevantLayers } of entries) {
     const ref = feature.properties.ref;
     if (!ref) continue;
     const [lon, lat] = feature.geometry.coordinates;
@@ -244,8 +269,10 @@ export function renderExitMarkers(layer: L.LayerGroup, features: PlacesFeatureCo
       iconSize: [24, 20],
       iconAnchor: [12, 10],
     });
-    L.marker([lat, lon], { icon }).bindPopup(feature.properties.name).addTo(layer);
+    const marker = L.marker([lat, lon], { icon }).bindPopup(feature.properties.name).addTo(layer);
+    rendered.push({ relevantLayers, marker });
   }
+  return rendered;
 }
 
 // Distinct from both the green start marker and the red end/shortest-route color, and from

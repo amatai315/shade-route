@@ -10,7 +10,10 @@ import {
   renderRoute,
   renderShadows,
   setBackgroundDimmed,
+  setExitMarkerDimmed,
   setRouteSegmentDimmed,
+  type ExitMarkerFeatureInput,
+  type ExitMarkerRenderResult,
   type MapLayers,
   type RouteRenderSegment,
 } from './map';
@@ -69,17 +72,18 @@ function summarizeFloorSequence(edges: GraphEdge[]): string[] {
 }
 
 /** Cycle order for the manual floor-toggle badge: the distinct `layer` values present across
- *  a computed route's edges (shortest + shaded combined), surface first (if present), then
- *  the rest ordered by depth - closest to the surface first (e.g. [0, -1, -2]). Deterministic
- *  regardless of which edge/route a layer first appears on. GPS/current position plays no
- *  part here - this is purely derived from the just-computed route's own edges. */
+ *  a computed route's edges (shortest + shaded combined), ordered by absolute distance from
+ *  the surface (0) - closest first, regardless of sign (e.g. [0, -1, -2], or [0, 1, 2] for
+ *  the rare elevated-deck case). Deterministic regardless of which edge/route a layer first
+ *  appears on. GPS/current position plays no part here - this is purely derived from the
+ *  just-computed route's own edges. */
 function distinctRouteLayers(edges: GraphEdge[]): number[] {
   const layers = [...new Set(edges.map((edge) => edge.layer))];
   layers.sort((a, b) => {
-    if (a === b) return 0;
-    if (a === 0) return -1;
-    if (b === 0) return 1;
-    return b - a; // closer-to-surface (less negative) first, e.g. -1 before -2
+    const diff = Math.abs(a) - Math.abs(b);
+    // Same magnitude, opposite sign (e.g. -1 vs 1) shouldn't occur together in one route in
+    // practice, but sort deterministically rather than leaving comparator output ambiguous.
+    return diff !== 0 ? diff : a - b;
   });
   return layers;
 }
@@ -195,12 +199,14 @@ export function startApp(
   // edges, never of currentPosition/locateState. floorCycle is empty (badge hidden) whenever
   // there's no computed route or it never leaves a single layer; otherwise it holds the
   // distinct layer values in cycle order (see distinctRouteLayers), and selectedFloorIndex
-  // indexes into it. routeLayerSegments mirrors startMarker/endMarker's "hold the last-drawn
-  // Leaflet object(s) so they can be restyled without re-rendering" pattern, one entry per
-  // contiguous same-layer run of the rendered shortest+shaded route lines.
+  // indexes into it. routeLayerSegments/exitMarkerResults mirror startMarker/endMarker's "hold
+  // the last-drawn Leaflet object(s) so they can be restyled without re-rendering" pattern:
+  // one entry per contiguous same-layer run of the rendered shortest+shaded route lines, and
+  // one entry per rendered exit marker (with the set of layers it's relevant to) respectively.
   let floorCycle: number[] = [];
   let selectedFloorIndex = 0;
   let routeLayerSegments: RouteRenderSegment[] = [];
+  let exitMarkerResults: ExitMarkerRenderResult[] = [];
 
   function showError(msg: string | null): void {
     if (!msg) {
@@ -375,16 +381,21 @@ export function startApp(
   }
 
   /** Applies the currently-selected floor to the map: dims the background road/shadow layers
-   *  whenever the selection isn't the surface, and dims every rendered route-line segment
-   *  whose layer doesn't match the selection. When the badge isn't shown (floorCycle empty -
-   *  either no route, a single-layer route, or a start/end snapped to the same node with zero
-   *  edges), that's the default state: nothing is dimmed regardless of what layer value(s)
-   *  the route's edges happen to carry. */
+   *  whenever the selection isn't the surface, dims every rendered route-line segment whose
+   *  layer doesn't match the selection, and dims every exit marker whose relevant-layers set
+   *  doesn't include the selection (a marker stays fully visible as long as the selected floor
+   *  is on either side of the transition it was matched to - see findExitsAtTransitions).
+   *  When the badge isn't shown (floorCycle empty - either no route, a single-layer route, or
+   *  a start/end snapped to the same node with zero edges), that's the default state: nothing
+   *  is dimmed regardless of what layer value(s) the route's edges happen to carry. */
   function applyFloorDisplay(): void {
     if (floorCycle.length === 0) {
       setBackgroundDimmed(layers, false);
       for (const segment of routeLayerSegments) {
         setRouteSegmentDimmed(segment.polyline, false);
+      }
+      for (const result of exitMarkerResults) {
+        setExitMarkerDimmed(result.marker, false);
       }
       return;
     }
@@ -392,6 +403,9 @@ export function startApp(
     setBackgroundDimmed(layers, selected !== 0);
     for (const segment of routeLayerSegments) {
       setRouteSegmentDimmed(segment.polyline, segment.layer !== selected);
+    }
+    for (const result of exitMarkerResults) {
+      setExitMarkerDimmed(result.marker, !result.relevantLayers.has(selected));
     }
   }
 
@@ -407,6 +421,7 @@ export function startApp(
     floorCycle = [];
     selectedFloorIndex = 0;
     routeLayerSegments = [];
+    exitMarkerResults = [];
     floorToggleButton.hidden = true;
     setBackgroundDimmed(layers, false);
   }
@@ -415,8 +430,9 @@ export function startApp(
    *  defaulting to "地上" (surface, undimmed) - the user actively taps to step into a dimmed
    *  underground-focused view, not the other way around (see plan decision A). No-op display
    *  of dimming beyond the default is left to the applyFloorDisplay() call site. */
-  function showFloorToggle(cycle: number[], segments: RouteRenderSegment[]): void {
+  function showFloorToggle(cycle: number[], segments: RouteRenderSegment[], markers: ExitMarkerRenderResult[]): void {
     routeLayerSegments = segments;
+    exitMarkerResults = markers;
     selectedFloorIndex = 0;
     if (cycle.length >= 2) {
       floorCycle = cycle;
@@ -593,17 +609,27 @@ export function startApp(
    *  there - exactly the over-broad-matching problem this replaces. */
   const TRANSITION_EXIT_MAX_DISTANCE_M = 25;
 
-  /** Coordinates ([lon, lat]) of every layer-transition boundary in one route's edges, in
-   *  order: the point where consecutive edges' `layer` values differ is the shared vertex
-   *  edges[i-1].coords[1] === edges[i].coords[0] (edges are ordered start-to-end with
-   *  matching from/to geometry - see graph.ts's addSegment/splitEdgeAt). Mirrors
-   *  summarizeFloorSequence's contiguous-run grouping, but yields the boundary coordinate
-   *  between runs instead of a label per run. */
-  function findLayerTransitions(edges: GraphEdge[]): [number, number][] {
-    const transitions: [number, number][] = [];
+  /** One layer-transition boundary in a route's edges: the coordinate ([lon, lat]) it occurs
+   *  at, plus the pair of layers it connects (the layer just before the boundary and the
+   *  layer just after) - e.g. a surface-to-B1 transition carries `layers: [0, -1]`. An exit
+   *  marker matched to this transition (see findExitsAtTransitions) is "relevant" to either
+   *  of these two layers. */
+  interface LayerTransition {
+    coord: [number, number];
+    layers: [number, number];
+  }
+
+  /** Every layer-transition boundary in one route's edges, in order: the point where
+   *  consecutive edges' `layer` values differ is the shared vertex edges[i-1].coords[1] ===
+   *  edges[i].coords[0] (edges are ordered start-to-end with matching from/to geometry - see
+   *  graph.ts's addSegment/splitEdgeAt). Mirrors summarizeFloorSequence's contiguous-run
+   *  grouping, but yields the boundary coordinate (and the layer pair it connects) between
+   *  runs instead of a label per run. */
+  function findLayerTransitions(edges: GraphEdge[]): LayerTransition[] {
+    const transitions: LayerTransition[] = [];
     for (let i = 1; i < edges.length; i++) {
       if (edges[i - 1].layer !== edges[i].layer) {
-        transitions.push(edges[i].coords[0]);
+        transitions.push({ coord: edges[i].coords[0], layers: [edges[i - 1].layer, edges[i].layer] });
       }
     }
     return transitions;
@@ -612,23 +638,28 @@ export function startApp(
   /** Returns the subset of ref-bearing entrance features (places.geojson) that sit within
    *  TRANSITION_EXIT_MAX_DISTANCE_M of a genuine floor-transition point on the given routes
    *  (shortest and shaded, kept separate so a boundary is never spuriously detected at the
-   *  seam between the two routes' edge lists). Unlike the previous "any edge, 40m" version,
-   *  a route that never changes layer produces zero transitions and therefore zero markers -
-   *  points merely near the route with no floor change there are correctly excluded. Only the
-   *  nearest ref-bearing feature per transition point is taken (mirrors findNearestExit's
-   *  "closest wins" behavior), and results are deduplicated so a feature matched from both
-   *  the shortest and shaded route's transition points is only rendered once. */
-  function findExitsAtTransitions(edgeLists: GraphEdge[][]): PlacesFeatureCollection['features'] {
-    const transitionPoints: L.LatLng[] = [];
+   *  seam between the two routes' edge lists), each paired with the union of layers (across
+   *  every transition point it was matched to) it's "relevant" to - used by the floor-toggle
+   *  badge (Part A) to decide which exit markers stay fully visible at a given floor
+   *  selection. Unlike the previous "any edge, 40m" version, a route that never changes layer
+   *  produces zero transitions and therefore zero markers - points merely near the route with
+   *  no floor change there are correctly excluded. Only the nearest ref-bearing feature per
+   *  transition point is taken (mirrors findNearestExit's "closest wins" behavior); a feature
+   *  matched from more than one transition point (e.g. from both the shortest and shaded
+   *  route's own transitions) is still only rendered once, with its relevant-layers set
+   *  covering all of them. */
+  function findExitsAtTransitions(edgeLists: GraphEdge[][]): ExitMarkerFeatureInput[] {
+    const transitionPoints: { point: L.LatLng; layers: [number, number] }[] = [];
     for (const edges of edgeLists) {
-      for (const [lon, lat] of findLayerTransitions(edges)) {
-        transitionPoints.push(L.latLng(lat, lon));
+      for (const transition of findLayerTransitions(edges)) {
+        const [lon, lat] = transition.coord;
+        transitionPoints.push({ point: L.latLng(lat, lon), layers: transition.layers });
       }
     }
     if (transitionPoints.length === 0) return [];
 
-    const matched = new Set<PlacesFeatureCollection['features'][number]>();
-    for (const point of transitionPoints) {
+    const matched = new Map<PlacesFeatureCollection['features'][number], Set<number>>();
+    for (const { point, layers } of transitionPoints) {
       let best: { feature: PlacesFeatureCollection['features'][number]; dist: number } | null = null;
       for (const feature of places.features) {
         if (!feature.properties.ref) continue;
@@ -637,9 +668,14 @@ export function startApp(
           best = { feature, dist };
         }
       }
-      if (best) matched.add(best.feature);
+      if (best) {
+        const relevantLayers = matched.get(best.feature) ?? new Set<number>();
+        relevantLayers.add(layers[0]);
+        relevantLayers.add(layers[1]);
+        matched.set(best.feature, relevantLayers);
+      }
     }
-    return [...matched];
+    return [...matched].map(([feature, relevantLayers]) => ({ feature, relevantLayers }));
   }
 
   function formatNearestExitLine(label: string, point: PointInfo): string {
@@ -698,12 +734,15 @@ export function startApp(
     const routeEdges = [...(shortest?.edges ?? []), ...(shaded?.edges ?? [])];
     const relevantShadows = findShadowsAlongEdges(routeEdges, currentShadows, shadowIndex);
     renderShadows(layers, relevantShadows);
-    renderExitMarkers(layers.exitMarkerLayer, findExitsAtTransitions([shortest?.edges ?? [], shaded?.edges ?? []]));
+    const exitMarkers = renderExitMarkers(
+      layers.exitMarkerLayer,
+      findExitsAtTransitions([shortest?.edges ?? [], shaded?.edges ?? []])
+    );
 
     // Every (re)computation - including a same-endpoints recompute triggered by a date/time
     // change via recomputeShadows() - starts the floor badge fresh at 地上/undimmed rather
     // than carrying over whatever floor was selected on a previous route.
-    showFloorToggle(distinctRouteLayers(routeEdges), [...shortestSegments, ...shadedSegments]);
+    showFloorToggle(distinctRouteLayers(routeEdges), [...shortestSegments, ...shadedSegments], exitMarkers);
 
     const exitLines = formatNearestExitLine('出発地', startInfo) + formatNearestExitLine('目的地', endInfo);
 
