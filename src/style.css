@@ -350,6 +350,38 @@ body {
   background: var(--color-accent);
 }
 
+/* Floating floor-toggle badge, bottom-left of the map viewport - the mirror-image corner of
+   .locate-button (bottom-right), so the two floating controls read as a matched pair without
+   colliding with the top-left route-inputs card or the top-right Leaflet zoom control. Only
+   shown once a computed route actually crosses between layers (see showFloorToggle in
+   ui.ts) - hidden by default via the `hidden` attribute, so no explicit `display` is set here
+   (a class rule forcing `display` would otherwise fight the `hidden` attribute's own styling).
+   Pill-shaped and text-labeled (not icon-only, unlike .locate-button) because its whole job is
+   to show which floor is selected ("地上" / "地下1階" / ...), reusing ui.ts's floorLabel()
+   text directly as the button's own label. */
+.floor-toggle-button {
+  position: absolute;
+  left: 8px;
+  bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  z-index: 1000;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 22px;
+  background: var(--color-panel);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 44px;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
 #panel {
   flex: 0 0 auto;
   max-height: 46vh;

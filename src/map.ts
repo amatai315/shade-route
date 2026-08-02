@@ -8,6 +8,14 @@ import type { GraphEdge, PlacesFeatureCollection, RouteResult } from './types';
 
 export const OTEMACHI_CENTER: L.LatLngTuple = [35.6862, 139.7671];
 
+// Background dimming levels used by the floor-toggle badge (ui.ts): when the user steps into
+// a non-surface floor, the road network and cast-shadow layers recede so the (per-layer-dimmed)
+// route line and floor selection read as the focus. Normal values match each layer's existing
+// baseline style so restoring to "地上" is an exact round-trip, not an approximation.
+const ROADS_NORMAL_OPACITY = 0.6;
+const ROADS_DIMMED_OPACITY = 0.2;
+const SHADOW_DIMMED_FILL_OPACITY = 0.2;
+
 export interface MapLayers {
   map: L.Map;
   roadsLayer: L.GeoJSON;
@@ -35,7 +43,7 @@ export function initMap(containerId: string): MapLayers {
     style: {
       color: '#555555',
       weight: 2,
-      opacity: 0.6,
+      opacity: ROADS_NORMAL_OPACITY,
     },
   }).addTo(map);
 
@@ -109,6 +117,21 @@ export function renderShadows(layers: MapLayers, shadows: ShadowPolygon[]): void
   }
 }
 
+/** Dims/undims the background road network and cast-shadow layers for the floor-toggle badge
+ *  (see ui.ts): when the selected floor isn't the surface, both recede so the map reads as
+ *  "focused on this underground level" rather than showing full surface-level detail
+ *  underneath a route that isn't actually there right now. shadowLayer holds an L.GeoJSON
+ *  child (see renderShadows) rather than being stylable directly - it's a plain LayerGroup,
+ *  not a FeatureGroup - so its children are walked and restyled individually. */
+export function setBackgroundDimmed(layers: MapLayers, dimmed: boolean): void {
+  layers.roadsLayer.setStyle({ opacity: dimmed ? ROADS_DIMMED_OPACITY : ROADS_NORMAL_OPACITY });
+  layers.shadowLayer.eachLayer((child) => {
+    if (child instanceof L.GeoJSON) {
+      child.setStyle({ fillOpacity: dimmed ? SHADOW_DIMMED_FILL_OPACITY : SHADOW_STYLE.fillOpacity });
+    }
+  });
+}
+
 function toLatLngs(coords: [number, number][]): L.LatLngTuple[] {
   return coords.map(([lon, lat]) => [lat, lon]);
 }
@@ -121,18 +144,25 @@ const INDOOR_DASH_ARRAY = '6, 6';
 
 interface RouteSubSegment {
   indoorOrUnderground: boolean;
+  /** OSM `layer` value shared by every edge in this run - see GraphEdge.layer. */
+  layer: number;
   coords: [number, number][];
 }
 
-/** Splits a route's edges into contiguous runs that share the same indoorOrUnderground value,
- *  so each run can be drawn with its own line style while keeping edge-to-edge geometry intact. */
+/** Splits a route's edges into contiguous runs that share both the same indoorOrUnderground
+ *  value and the same exact `layer` value, so each run can be drawn with its own line style
+ *  (dash pattern from indoorOrUnderground) while also being independently addressable for
+ *  per-floor opacity toggling (keyed on `layer` - see setRouteSegmentDimmed/ui.ts's floor
+ *  badge). Splitting on the finer of the two values is safe: indoorOrUnderground can be true
+ *  at layer 0 (e.g. an indoor mall passage), so a layer-only split would wrongly merge runs
+ *  that need different dash treatment. */
 function splitRouteSegments(edges: GraphEdge[]): RouteSubSegment[] {
   const segments: RouteSubSegment[] = [];
   let current: RouteSubSegment | null = null;
   for (const edge of edges) {
-    if (!current || current.indoorOrUnderground !== edge.indoorOrUnderground) {
+    if (!current || current.indoorOrUnderground !== edge.indoorOrUnderground || current.layer !== edge.layer) {
       if (current) segments.push(current);
-      current = { indoorOrUnderground: edge.indoorOrUnderground, coords: [edge.coords[0], edge.coords[1]] };
+      current = { indoorOrUnderground: edge.indoorOrUnderground, layer: edge.layer, coords: [edge.coords[0], edge.coords[1]] };
     } else {
       current.coords.push(edge.coords[1]);
     }
@@ -141,18 +171,44 @@ function splitRouteSegments(edges: GraphEdge[]): RouteSubSegment[] {
   return segments;
 }
 
-export function renderRoute(layer: L.LayerGroup, route: RouteResult | null, color: string): void {
+/** Opacity a route-line segment is drawn at once the floor badge is toggled to a level that
+ *  doesn't match it - matches ROUTE_SEGMENT_NORMAL_OPACITY's role as "the segment is there but
+ *  de-emphasized", not "invisible", mirroring the 0.15-0.3 dimming range used for the
+ *  background roads/shadow layers. */
+const ROUTE_SEGMENT_NORMAL_OPACITY = 0.85; // matches renderRoute's previous fixed opacity
+const ROUTE_SEGMENT_DIMMED_OPACITY = 0.25;
+
+/** A single contiguous same-layer/same-dash-style run of a rendered route, with the polyline
+ *  Leaflet object that was drawn for it. Returned by renderRoute so callers (ui.ts's floor
+ *  badge) can independently dim/undim each segment's opacity later, without re-rendering the
+ *  whole route. */
+export interface RouteRenderSegment {
+  layer: number;
+  polyline: L.Polyline;
+}
+
+export function renderRoute(layer: L.LayerGroup, route: RouteResult | null, color: string): RouteRenderSegment[] {
   layer.clearLayers();
-  if (!route) return;
+  if (!route) return [];
+  const rendered: RouteRenderSegment[] = [];
   for (const segment of splitRouteSegments(route.edges)) {
-    L.polyline(toLatLngs(segment.coords), {
+    const polyline = L.polyline(toLatLngs(segment.coords), {
       color,
       weight: 5,
-      opacity: 0.85,
+      opacity: ROUTE_SEGMENT_NORMAL_OPACITY,
       lineCap: 'round',
       dashArray: segment.indoorOrUnderground ? INDOOR_DASH_ARRAY : undefined,
     }).addTo(layer);
+    rendered.push({ layer: segment.layer, polyline });
   }
+  return rendered;
+}
+
+/** Dims/undims one route-line segment for the floor-toggle badge (see ui.ts) - called per
+ *  segment returned by renderRoute rather than re-rendering, so cycling floors is just a
+ *  style update. */
+export function setRouteSegmentDimmed(polyline: L.Polyline, dimmed: boolean): void {
+  polyline.setStyle({ opacity: dimmed ? ROUTE_SEGMENT_DIMMED_OPACITY : ROUTE_SEGMENT_NORMAL_OPACITY });
 }
 
 export type MarkerKind = 'start' | 'end';
@@ -171,10 +227,11 @@ export function renderMarker(layer: L.LayerGroup, kind: MarkerKind, lat: number,
 
 /** Renders the given subway/station-entrance place features (each expected to have a `ref`,
  *  e.g. "B4") as small numbered badge markers. Like the shadow layer, this is route-relevant
- *  only: callers are expected to pass just the subset of entrances near the currently
- *  computed route (see `findExitsAlongEdges` in ui.ts), not the full places dataset - so the
- *  layer is empty until a route exists and updates whenever the route is (re)computed,
- *  instead of showing every entrance in the loaded area as permanent map clutter. */
+ *  only: callers are expected to pass just the subset of entrances that sit at a genuine
+ *  floor-transition point on the currently computed route (see `findExitsAtTransitions` in
+ *  ui.ts), not the full places dataset - so the layer is empty until a route exists and
+ *  updates whenever the route is (re)computed, instead of showing every entrance in the
+ *  loaded area as permanent map clutter. */
 export function renderExitMarkers(layer: L.LayerGroup, features: PlacesFeatureCollection['features']): void {
   layer.clearLayers();
   for (const feature of features) {
