@@ -8,16 +8,31 @@ import type { GraphEdge, PlacesFeatureCollection, RouteResult } from './types';
 
 export const OTEMACHI_CENTER: L.LatLngTuple = [35.6862, 139.7671];
 
-// Background dimming levels used by the floor-toggle badge (ui.ts): when the user steps into
-// a non-surface floor, the road network and cast-shadow layers recede so the (per-layer-dimmed)
-// route line and floor selection read as the focus. Normal values match each layer's existing
-// baseline style so restoring to "地上" is an exact round-trip, not an approximation.
 const ROADS_NORMAL_OPACITY = 0.6;
-const ROADS_DIMMED_OPACITY = 0.2;
-const SHADOW_DIMMED_FILL_OPACITY = 0.2;
+// Shared "background context" opacity for underground mode (ui.ts's binary 地上/地下 toggle -
+// see setUndergroundMode below): both the underground-mode roads layer (which shows only the
+// indoor/underground network, dimly) and the surface-side portion of a rendered route line
+// while underground mode is active use this same value, so the two read as one consistent
+// "de-emphasized, but still there" treatment.
+const UNDERGROUND_CONTEXT_OPACITY = 0.2;
+
+/** Static style used for the roads layer in normal (地上) mode, and per-feature style used in
+ *  underground (地下) mode: only `indoor_or_underground` roads are shown (dimly, as background
+ *  context) - surface roads are opacity 0, i.e. present but invisible, rather than removed,
+ *  so switching back to 地上 is a plain `setStyle` call rather than a re-render. */
+function roadsStyle(underground: boolean): (feature?: GeoJSON.Feature) => L.PathOptions {
+  return (feature) => {
+    if (!underground) {
+      return { color: '#555555', weight: 2, opacity: ROADS_NORMAL_OPACITY };
+    }
+    const isUnderground = feature?.properties?.indoor_or_underground === true;
+    return { color: '#555555', weight: 2, opacity: isUnderground ? UNDERGROUND_CONTEXT_OPACITY : 0 };
+  };
+}
 
 export interface MapLayers {
   map: L.Map;
+  tileLayer: L.TileLayer;
   roadsLayer: L.GeoJSON;
   shadowLayer: L.LayerGroup;
   shortestRouteLayer: L.LayerGroup;
@@ -34,17 +49,13 @@ export function initMap(containerId: string): MapLayers {
 
   L.control.zoom({ position: 'topright' }).addTo(map);
 
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
 
   const roadsLayer = L.geoJSON(undefined, {
-    style: {
-      color: '#555555',
-      weight: 2,
-      opacity: ROADS_NORMAL_OPACITY,
-    },
+    style: roadsStyle(false),
   }).addTo(map);
 
   const shadowLayer = L.layerGroup().addTo(map);
@@ -56,6 +67,7 @@ export function initMap(containerId: string): MapLayers {
 
   return {
     map,
+    tileLayer,
     roadsLayer,
     shadowLayer,
     shortestRouteLayer,
@@ -69,6 +81,25 @@ export function initMap(containerId: string): MapLayers {
 export function renderRoads(layers: MapLayers, roadsGeoJson: GeoJSON.FeatureCollection): void {
   layers.roadsLayer.clearLayers();
   layers.roadsLayer.addData(roadsGeoJson);
+}
+
+/** Switches the map between the two modes of ui.ts's binary 地上/地下 toggle. 地上 is the
+ *  existing normal rendering (untouched); 地下 is a "schematic" mode: the OSM tile layer is
+ *  removed entirely (not just faded) so it also stops issuing further tile requests while
+ *  hidden, which reveals #map's own light-gray CSS background (style.css) as the canvas -
+ *  no separate background element needed. The cast-shadow layer is likewise removed/added
+ *  wholesale rather than restyled, since 地下 mode hides it completely rather than dimming it.
+ *  The roads layer is restyled in place via setStyle (see roadsStyle) rather than re-rendered,
+ *  since the underlying GeoJSON data doesn't change - only which features are visible and how. */
+export function setUndergroundMode(layers: MapLayers, underground: boolean): void {
+  if (underground) {
+    layers.map.removeLayer(layers.tileLayer);
+    layers.map.removeLayer(layers.shadowLayer);
+  } else {
+    layers.map.addLayer(layers.tileLayer);
+    layers.map.addLayer(layers.shadowLayer);
+  }
+  layers.roadsLayer.setStyle(roadsStyle(underground));
 }
 
 // Single shared style used for the (unioned) shadow layer. 0.48 is chosen so an isolated
@@ -117,21 +148,6 @@ export function renderShadows(layers: MapLayers, shadows: ShadowPolygon[]): void
   }
 }
 
-/** Dims/undims the background road network and cast-shadow layers for the floor-toggle badge
- *  (see ui.ts): when the selected floor isn't the surface, both recede so the map reads as
- *  "focused on this underground level" rather than showing full surface-level detail
- *  underneath a route that isn't actually there right now. shadowLayer holds an L.GeoJSON
- *  child (see renderShadows) rather than being stylable directly - it's a plain LayerGroup,
- *  not a FeatureGroup - so its children are walked and restyled individually. */
-export function setBackgroundDimmed(layers: MapLayers, dimmed: boolean): void {
-  layers.roadsLayer.setStyle({ opacity: dimmed ? ROADS_DIMMED_OPACITY : ROADS_NORMAL_OPACITY });
-  layers.shadowLayer.eachLayer((child) => {
-    if (child instanceof L.GeoJSON) {
-      child.setStyle({ fillOpacity: dimmed ? SHADOW_DIMMED_FILL_OPACITY : SHADOW_STYLE.fillOpacity });
-    }
-  });
-}
-
 function toLatLngs(coords: [number, number][]): L.LatLngTuple[] {
   return coords.map(([lon, lat]) => [lat, lon]);
 }
@@ -144,25 +160,19 @@ const INDOOR_DASH_ARRAY = '6, 6';
 
 interface RouteSubSegment {
   indoorOrUnderground: boolean;
-  /** OSM `layer` value shared by every edge in this run - see GraphEdge.layer. */
-  layer: number;
   coords: [number, number][];
 }
 
-/** Splits a route's edges into contiguous runs that share both the same indoorOrUnderground
- *  value and the same exact `layer` value, so each run can be drawn with its own line style
- *  (dash pattern from indoorOrUnderground) while also being independently addressable for
- *  per-floor opacity toggling (keyed on `layer` - see setRouteSegmentDimmed/ui.ts's floor
- *  badge). Splitting on the finer of the two values is safe: indoorOrUnderground can be true
- *  at layer 0 (e.g. an indoor mall passage), so a layer-only split would wrongly merge runs
- *  that need different dash treatment. */
+/** Splits a route's edges into contiguous same-indoorOrUnderground runs, so each run can be
+ *  drawn with its own dash pattern and independently faded in/out of "background context"
+ *  opacity when the 地下 toggle (ui.ts) is active (see setRouteSegmentDimmed). */
 function splitRouteSegments(edges: GraphEdge[]): RouteSubSegment[] {
   const segments: RouteSubSegment[] = [];
   let current: RouteSubSegment | null = null;
   for (const edge of edges) {
-    if (!current || current.indoorOrUnderground !== edge.indoorOrUnderground || current.layer !== edge.layer) {
+    if (!current || current.indoorOrUnderground !== edge.indoorOrUnderground) {
       if (current) segments.push(current);
-      current = { indoorOrUnderground: edge.indoorOrUnderground, layer: edge.layer, coords: [edge.coords[0], edge.coords[1]] };
+      current = { indoorOrUnderground: edge.indoorOrUnderground, coords: [edge.coords[0], edge.coords[1]] };
     } else {
       current.coords.push(edge.coords[1]);
     }
@@ -171,19 +181,13 @@ function splitRouteSegments(edges: GraphEdge[]): RouteSubSegment[] {
   return segments;
 }
 
-/** Opacity a route-line segment is drawn at once the floor badge is toggled to a level that
- *  doesn't match it - matches ROUTE_SEGMENT_NORMAL_OPACITY's role as "the segment is there but
- *  de-emphasized", not "invisible", mirroring the 0.15-0.3 dimming range used for the
- *  background roads/shadow layers. */
 const ROUTE_SEGMENT_NORMAL_OPACITY = 0.85; // matches renderRoute's previous fixed opacity
-const ROUTE_SEGMENT_DIMMED_OPACITY = 0.25;
 
-/** A single contiguous same-layer/same-dash-style run of a rendered route, with the polyline
- *  Leaflet object that was drawn for it. Returned by renderRoute so callers (ui.ts's floor
- *  badge) can independently dim/undim each segment's opacity later, without re-rendering the
- *  whole route. */
+/** A single contiguous same-dash-style run of a rendered route, with the polyline Leaflet
+ *  object drawn for it. Returned by renderRoute so callers (ui.ts's 地上/地下 toggle) can
+ *  independently fade each segment's opacity later, without re-rendering the whole route. */
 export interface RouteRenderSegment {
-  layer: number;
+  indoorOrUnderground: boolean;
   polyline: L.Polyline;
 }
 
@@ -199,23 +203,17 @@ export function renderRoute(layer: L.LayerGroup, route: RouteResult | null, colo
       lineCap: 'round',
       dashArray: segment.indoorOrUnderground ? INDOOR_DASH_ARRAY : undefined,
     }).addTo(layer);
-    rendered.push({ layer: segment.layer, polyline });
+    rendered.push({ indoorOrUnderground: segment.indoorOrUnderground, polyline });
   }
   return rendered;
 }
 
-/** Dims/undims one route-line segment for the floor-toggle badge (see ui.ts) - called per
- *  segment returned by renderRoute rather than re-rendering, so cycling floors is just a
- *  style update. */
+/** Fades/restores one route-line segment for the 地上/地下 toggle (see ui.ts) - called per
+ *  segment returned by renderRoute rather than re-rendering, so toggling is just a style
+ *  update. Shares UNDERGROUND_CONTEXT_OPACITY with the underground-mode roads layer so a
+ *  dimmed surface-side route segment reads the same as the dimmed background around it. */
 export function setRouteSegmentDimmed(polyline: L.Polyline, dimmed: boolean): void {
-  polyline.setStyle({ opacity: dimmed ? ROUTE_SEGMENT_DIMMED_OPACITY : ROUTE_SEGMENT_NORMAL_OPACITY });
-}
-
-/** Dims/undims one exit marker for the floor-toggle badge (see ui.ts) - same opacity values
- *  as setRouteSegmentDimmed so the marker and the route segment it sits next to read as
- *  consistently "de-emphasized" or "focused" together. */
-export function setExitMarkerDimmed(marker: L.Marker, dimmed: boolean): void {
-  marker.setOpacity(dimmed ? ROUTE_SEGMENT_DIMMED_OPACITY : ROUTE_SEGMENT_NORMAL_OPACITY);
+  polyline.setStyle({ opacity: dimmed ? UNDERGROUND_CONTEXT_OPACITY : ROUTE_SEGMENT_NORMAL_OPACITY });
 }
 
 export type MarkerKind = 'start' | 'end';
@@ -232,34 +230,18 @@ export function renderMarker(layer: L.LayerGroup, kind: MarkerKind, lat: number,
   return marker;
 }
 
-/** One entrance feature plus the set of `layer` values (surface=0, underground negative) it's
- *  relevant to - i.e. every layer that appears on either side of a floor-transition boundary
- *  this feature was matched to (see `findExitsAtTransitions` in ui.ts). A feature matched to
- *  more than one transition point carries the union of all of them. */
-export interface ExitMarkerFeatureInput {
-  feature: PlacesFeatureCollection['features'][number];
-  relevantLayers: Set<number>;
-}
-
-/** A single rendered exit marker with the relevant-layers info it was drawn from, mirroring
- *  RouteRenderSegment: returned so callers (ui.ts's floor badge) can independently dim/undim
- *  it later without re-rendering the whole marker set. */
-export interface ExitMarkerRenderResult {
-  relevantLayers: Set<number>;
-  marker: L.Marker;
-}
-
 /** Renders the given subway/station-entrance features (each expected to have a `ref`, e.g.
  *  "B4") as small numbered badge markers. Like the shadow layer, this is route-relevant only:
  *  callers are expected to pass just the subset of entrances that sit at a genuine
  *  floor-transition point on the currently computed route (see `findExitsAtTransitions` in
  *  ui.ts), not the full places dataset - so the layer is empty until a route exists and
  *  updates whenever the route is (re)computed, instead of showing every entrance in the
- *  loaded area as permanent map clutter. */
-export function renderExitMarkers(layer: L.LayerGroup, entries: ExitMarkerFeatureInput[]): ExitMarkerRenderResult[] {
+ *  loaded area as permanent map clutter. Always rendered at full visibility, in both the
+ *  地上 and 地下 map modes (see ui.ts) - unlike the roads/shadow/route layers, exit markers
+ *  are never faded or hidden by the toggle. */
+export function renderExitMarkers(layer: L.LayerGroup, features: PlacesFeatureCollection['features']): void {
   layer.clearLayers();
-  const rendered: ExitMarkerRenderResult[] = [];
-  for (const { feature, relevantLayers } of entries) {
+  for (const feature of features) {
     const ref = feature.properties.ref;
     if (!ref) continue;
     const [lon, lat] = feature.geometry.coordinates;
@@ -269,10 +251,8 @@ export function renderExitMarkers(layer: L.LayerGroup, entries: ExitMarkerFeatur
       iconSize: [24, 20],
       iconAnchor: [12, 10],
     });
-    const marker = L.marker([lat, lon], { icon }).bindPopup(feature.properties.name).addTo(layer);
-    rendered.push({ relevantLayers, marker });
+    L.marker([lat, lon], { icon }).bindPopup(feature.properties.name).addTo(layer);
   }
-  return rendered;
 }
 
 // Distinct from both the green start marker and the red end/shortest-route color, and from

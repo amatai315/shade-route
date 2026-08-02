@@ -9,11 +9,8 @@ import {
   renderMarker,
   renderRoute,
   renderShadows,
-  setBackgroundDimmed,
-  setExitMarkerDimmed,
   setRouteSegmentDimmed,
-  type ExitMarkerFeatureInput,
-  type ExitMarkerRenderResult,
+  setUndergroundMode,
   type MapLayers,
   type RouteRenderSegment,
 } from './map';
@@ -41,51 +38,6 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 function categoryLabel(category: string): string {
   return CATEGORY_LABELS[category] ?? category;
-}
-
-const SURFACE_LABEL = '地上';
-
-/** Positive `layer` values are rare in this pedestrian-path dataset (~20 features, mostly
- *  footbridges/decks) and OSM doesn't give them the same "Nth basement" meaning negative
- *  layers have, so this is a best-effort label rather than a precise floor number. */
-function floorLabel(layer: number): string {
-  if (layer === 0) return SURFACE_LABEL;
-  if (layer < 0) return `地下${-layer}階`;
-  return `${layer + 1}階`;
-}
-
-/** Walks a route's edges in order and collapses consecutive same-layer runs into one label
- *  each, e.g. surface -> B1 -> B2 -> surface yields ["地上", "地下1階", "地下2階", "地上"]
- *  rather than one entry per edge. Mirrors the contiguous-run grouping map.ts's
- *  splitRouteSegments uses for the dashed indoor/underground line rendering, keyed on
- *  `layer` instead of `indoorOrUnderground`. */
-function summarizeFloorSequence(edges: GraphEdge[]): string[] {
-  const labels: string[] = [];
-  let currentLayer: number | null = null;
-  for (const edge of edges) {
-    if (currentLayer === null || currentLayer !== edge.layer) {
-      labels.push(floorLabel(edge.layer));
-      currentLayer = edge.layer;
-    }
-  }
-  return labels;
-}
-
-/** Cycle order for the manual floor-toggle badge: the distinct `layer` values present across
- *  a computed route's edges (shortest + shaded combined), ordered by absolute distance from
- *  the surface (0) - closest first, regardless of sign (e.g. [0, -1, -2], or [0, 1, 2] for
- *  the rare elevated-deck case). Deterministic regardless of which edge/route a layer first
- *  appears on. GPS/current position plays no part here - this is purely derived from the
- *  just-computed route's own edges. */
-function distinctRouteLayers(edges: GraphEdge[]): number[] {
-  const layers = [...new Set(edges.map((edge) => edge.layer))];
-  layers.sort((a, b) => {
-    const diff = Math.abs(a) - Math.abs(b);
-    // Same magnitude, opposite sign (e.g. -1 vs 1) shouldn't occur together in one route in
-    // practice, but sort deterministically rather than leaving comparator output ambiguous.
-    return diff !== 0 ? diff : a - b;
-  });
-  return layers;
 }
 
 /** A start/end point only counts as "at" an exit if it's within this many meters of it -
@@ -195,18 +147,16 @@ export function startApp(
   let locateState: LocateState = 'off';
   let watchId: number | null = null;
   let currentPosition: CurrentPosition | null = null;
-  // Manual floor-toggle badge (Part A) - purely a function of the just-computed route's own
-  // edges, never of currentPosition/locateState. floorCycle is empty (badge hidden) whenever
-  // there's no computed route or it never leaves a single layer; otherwise it holds the
-  // distinct layer values in cycle order (see distinctRouteLayers), and selectedFloorIndex
-  // indexes into it. routeLayerSegments/exitMarkerResults mirror startMarker/endMarker's "hold
-  // the last-drawn Leaflet object(s) so they can be restyled without re-rendering" pattern:
-  // one entry per contiguous same-layer run of the rendered shortest+shaded route lines, and
-  // one entry per rendered exit marker (with the set of layers it's relevant to) respectively.
-  let floorCycle: number[] = [];
-  let selectedFloorIndex = 0;
-  let routeLayerSegments: RouteRenderSegment[] = [];
-  let exitMarkerResults: ExitMarkerRenderResult[] = [];
+  // Manual 地上/地下 toggle - purely a function of the just-computed route's own edges, never
+  // of currentPosition/locateState. undergroundToggleVisible is false (badge hidden) whenever
+  // there's no computed route or it never crosses between surface and indoor/underground;
+  // undergroundSelected is the current binary selection (always resets to false/地上 on a
+  // fresh route). routeSegments mirrors startMarker/endMarker's "hold the last-drawn Leaflet
+  // object(s) so they can be restyled without re-rendering" pattern: one entry per contiguous
+  // indoorOrUnderground run of the rendered shortest+shaded route lines.
+  let undergroundToggleVisible = false;
+  let undergroundSelected = false;
+  let routeSegments: RouteRenderSegment[] = [];
 
   function showError(msg: string | null): void {
     if (!msg) {
@@ -376,77 +326,49 @@ export function startApp(
     routeButton.disabled = !(startInfo && endInfo);
   }
 
-  function selectedFloorLayer(): number {
-    return floorCycle[selectedFloorIndex] ?? 0;
-  }
-
-  /** Applies the currently-selected floor to the map: dims the background road/shadow layers
-   *  whenever the selection isn't the surface, dims every rendered route-line segment whose
-   *  layer doesn't match the selection, and dims every exit marker whose relevant-layers set
-   *  doesn't include the selection (a marker stays fully visible as long as the selected floor
-   *  is on either side of the transition it was matched to - see findExitsAtTransitions).
-   *  When the badge isn't shown (floorCycle empty - either no route, a single-layer route, or
-   *  a start/end snapped to the same node with zero edges), that's the default state: nothing
-   *  is dimmed regardless of what layer value(s) the route's edges happen to carry. */
-  function applyFloorDisplay(): void {
-    if (floorCycle.length === 0) {
-      setBackgroundDimmed(layers, false);
-      for (const segment of routeLayerSegments) {
-        setRouteSegmentDimmed(segment.polyline, false);
-      }
-      for (const result of exitMarkerResults) {
-        setExitMarkerDimmed(result.marker, false);
-      }
-      return;
-    }
-    const selected = selectedFloorLayer();
-    setBackgroundDimmed(layers, selected !== 0);
-    for (const segment of routeLayerSegments) {
-      setRouteSegmentDimmed(segment.polyline, segment.layer !== selected);
-    }
-    for (const result of exitMarkerResults) {
-      setExitMarkerDimmed(result.marker, !result.relevantLayers.has(selected));
+  /** Applies the currently-selected 地上/地下 mode to the map: switches the tile/roads/shadow
+   *  layers via setUndergroundMode, and fades every rendered route-line segment that's on the
+   *  "wrong side" for the current mode - surface segments while 地下 is selected (kept faintly
+   *  visible for continuity, not hidden), nothing while 地上 is selected. Exit/start/end/
+   *  current-location markers are never touched here - they stay fully visible in both modes
+   *  (see renderExitMarkers in map.ts). */
+  function applyUndergroundDisplay(): void {
+    setUndergroundMode(layers, undergroundSelected);
+    for (const segment of routeSegments) {
+      setRouteSegmentDimmed(segment.polyline, undergroundSelected && !segment.indoorOrUnderground);
     }
   }
 
   function updateFloorToggleLabel(): void {
-    floorToggleButton.textContent = floorLabel(selectedFloorLayer());
+    floorToggleButton.textContent = undergroundSelected ? '地下' : '地上';
   }
 
-  /** Hides the floor-toggle badge and resets its internal state + any dimming back to normal.
-   *  Called whenever the route it was derived from goes away (start/end changed, reset, or a
-   *  route recomputation that's about to rebuild it from scratch) - mirrors how
+  /** Hides the 地上/地下 toggle button and resets its internal state + display back to normal
+   *  (地上). Called whenever the route it was derived from goes away (start/end changed, reset,
+   *  or a route recomputation that's about to rebuild it from scratch) - mirrors how
    *  invalidateComputedRoute/resetSelection already clear the other route-dependent UI. */
   function hideFloorToggle(): void {
-    floorCycle = [];
-    selectedFloorIndex = 0;
-    routeLayerSegments = [];
-    exitMarkerResults = [];
+    undergroundToggleVisible = false;
+    undergroundSelected = false;
+    routeSegments = [];
     floorToggleButton.hidden = true;
-    setBackgroundDimmed(layers, false);
+    setUndergroundMode(layers, false);
   }
 
-  /** Shows the floor-toggle badge for a newly-computed route that crosses 2+ distinct layers,
-   *  defaulting to "地上" (surface, undimmed) - the user actively taps to step into a dimmed
-   *  underground-focused view, not the other way around (see plan decision A). No-op display
-   *  of dimming beyond the default is left to the applyFloorDisplay() call site. */
-  function showFloorToggle(cycle: number[], segments: RouteRenderSegment[], markers: ExitMarkerRenderResult[]): void {
-    routeLayerSegments = segments;
-    exitMarkerResults = markers;
-    selectedFloorIndex = 0;
-    if (cycle.length >= 2) {
-      floorCycle = cycle;
-      floorToggleButton.hidden = false;
-      updateFloorToggleLabel();
-    } else {
-      // Single (or zero) distinct layer - nothing to toggle, badge stays hidden. floorCycle
-      // is left empty (rather than set to `cycle`) so applyFloorDisplay's "badge not shown"
-      // branch always undims, even if that lone layer happens to be non-zero (e.g. a route
-      // that's entirely underground with no surface leg at all).
-      floorCycle = [];
-      floorToggleButton.hidden = true;
-    }
-    applyFloorDisplay();
+  /** Shows the toggle button for a newly-computed route, but only if it actually crosses
+   *  between surface and indoor/underground (both true and false indoorOrUnderground segments
+   *  present) - a route that's entirely one or the other has nothing to toggle. Always
+   *  defaults to "地上" - the user actively taps to step into the dimmed underground-focused
+   *  view, not the other way around (see plan decision). */
+  function showFloorToggle(segments: RouteRenderSegment[]): void {
+    routeSegments = segments;
+    undergroundSelected = false;
+    const hasSurface = segments.some((s) => !s.indoorOrUnderground);
+    const hasUnderground = segments.some((s) => s.indoorOrUnderground);
+    undergroundToggleVisible = hasSurface && hasUnderground;
+    floorToggleButton.hidden = !undergroundToggleVisible;
+    updateFloorToggleLabel();
+    applyUndergroundDisplay();
   }
 
   function getSelectedDate(): Date {
@@ -610,26 +532,21 @@ export function startApp(
   const TRANSITION_EXIT_MAX_DISTANCE_M = 25;
 
   /** One layer-transition boundary in a route's edges: the coordinate ([lon, lat]) it occurs
-   *  at, plus the pair of layers it connects (the layer just before the boundary and the
-   *  layer just after) - e.g. a surface-to-B1 transition carries `layers: [0, -1]`. An exit
-   *  marker matched to this transition (see findExitsAtTransitions) is "relevant" to either
-   *  of these two layers. */
+   *  at. Used to find where an exit marker should be shown (see findExitsAtTransitions) - not
+   *  tied to the 地上/地下 toggle's own (simpler, indoorOrUnderground-based) show/hide check. */
   interface LayerTransition {
     coord: [number, number];
-    layers: [number, number];
   }
 
   /** Every layer-transition boundary in one route's edges, in order: the point where
    *  consecutive edges' `layer` values differ is the shared vertex edges[i-1].coords[1] ===
    *  edges[i].coords[0] (edges are ordered start-to-end with matching from/to geometry - see
-   *  graph.ts's addSegment/splitEdgeAt). Mirrors summarizeFloorSequence's contiguous-run
-   *  grouping, but yields the boundary coordinate (and the layer pair it connects) between
-   *  runs instead of a label per run. */
+   *  graph.ts's addSegment/splitEdgeAt). */
   function findLayerTransitions(edges: GraphEdge[]): LayerTransition[] {
     const transitions: LayerTransition[] = [];
     for (let i = 1; i < edges.length; i++) {
       if (edges[i - 1].layer !== edges[i].layer) {
-        transitions.push({ coord: edges[i].coords[0], layers: [edges[i - 1].layer, edges[i].layer] });
+        transitions.push({ coord: edges[i].coords[0] });
       }
     }
     return transitions;
@@ -638,28 +555,25 @@ export function startApp(
   /** Returns the subset of ref-bearing entrance features (places.geojson) that sit within
    *  TRANSITION_EXIT_MAX_DISTANCE_M of a genuine floor-transition point on the given routes
    *  (shortest and shaded, kept separate so a boundary is never spuriously detected at the
-   *  seam between the two routes' edge lists), each paired with the union of layers (across
-   *  every transition point it was matched to) it's "relevant" to - used by the floor-toggle
-   *  badge (Part A) to decide which exit markers stay fully visible at a given floor
-   *  selection. Unlike the previous "any edge, 40m" version, a route that never changes layer
-   *  produces zero transitions and therefore zero markers - points merely near the route with
-   *  no floor change there are correctly excluded. Only the nearest ref-bearing feature per
-   *  transition point is taken (mirrors findNearestExit's "closest wins" behavior); a feature
-   *  matched from more than one transition point (e.g. from both the shortest and shaded
-   *  route's own transitions) is still only rendered once, with its relevant-layers set
-   *  covering all of them. */
-  function findExitsAtTransitions(edgeLists: GraphEdge[][]): ExitMarkerFeatureInput[] {
-    const transitionPoints: { point: L.LatLng; layers: [number, number] }[] = [];
+   *  seam between the two routes' edge lists) - these are always rendered at full visibility
+   *  (see renderExitMarkers in map.ts), regardless of the 地上/地下 toggle's selection. Unlike
+   *  the previous "any edge, 40m" version, a route that never changes layer produces zero
+   *  transitions and therefore zero markers - points merely near the route with no floor
+   *  change there are correctly excluded. Only the nearest ref-bearing feature per transition
+   *  point is taken (mirrors findNearestExit's "closest wins" behavior); a feature matched
+   *  from more than one transition point is still only rendered once. */
+  function findExitsAtTransitions(edgeLists: GraphEdge[][]): PlacesFeatureCollection['features'] {
+    const transitionPoints: L.LatLng[] = [];
     for (const edges of edgeLists) {
       for (const transition of findLayerTransitions(edges)) {
         const [lon, lat] = transition.coord;
-        transitionPoints.push({ point: L.latLng(lat, lon), layers: transition.layers });
+        transitionPoints.push(L.latLng(lat, lon));
       }
     }
     if (transitionPoints.length === 0) return [];
 
-    const matched = new Map<PlacesFeatureCollection['features'][number], Set<number>>();
-    for (const { point, layers } of transitionPoints) {
+    const matched = new Set<PlacesFeatureCollection['features'][number]>();
+    for (const point of transitionPoints) {
       let best: { feature: PlacesFeatureCollection['features'][number]; dist: number } | null = null;
       for (const feature of places.features) {
         if (!feature.properties.ref) continue;
@@ -668,14 +582,9 @@ export function startApp(
           best = { feature, dist };
         }
       }
-      if (best) {
-        const relevantLayers = matched.get(best.feature) ?? new Set<number>();
-        relevantLayers.add(layers[0]);
-        relevantLayers.add(layers[1]);
-        matched.set(best.feature, relevantLayers);
-      }
+      if (best) matched.add(best.feature);
     }
-    return [...matched].map(([feature, relevantLayers]) => ({ feature, relevantLayers }));
+    return [...matched];
   }
 
   function formatNearestExitLine(label: string, point: PointInfo): string {
@@ -689,15 +598,7 @@ export function startApp(
       return `<div class="result-item"><strong>${label}</strong>: ルートが見つかりませんでした</div>`;
     }
     const pct = (route.shadeRatio * 100).toFixed(0);
-    const floors = summarizeFloorSequence(route.edges);
-    // A route that never leaves the surface produces a single "地上" entry - that's not
-    // worth a line of its own, so only render the sequence when it's informative (more
-    // than one leg, or the whole route sits below/above ground).
-    const floorLine =
-      floors.length > 1 || (floors.length === 1 && floors[0] !== SURFACE_LABEL)
-        ? `<div class="result-floor">経路: ${floors.join(' → ')}</div>`
-        : '';
-    return `<div class="result-item"><strong>${label}</strong>: ${route.distanceMeters.toFixed(0)} m / 日陰率 ${pct}%${floorLine}</div>`;
+    return `<div class="result-item"><strong>${label}</strong>: ${route.distanceMeters.toFixed(0)} m / 日陰率 ${pct}%</div>`;
   }
 
   function runRouteCalculation(): void {
@@ -734,15 +635,12 @@ export function startApp(
     const routeEdges = [...(shortest?.edges ?? []), ...(shaded?.edges ?? [])];
     const relevantShadows = findShadowsAlongEdges(routeEdges, currentShadows, shadowIndex);
     renderShadows(layers, relevantShadows);
-    const exitMarkers = renderExitMarkers(
-      layers.exitMarkerLayer,
-      findExitsAtTransitions([shortest?.edges ?? [], shaded?.edges ?? []])
-    );
+    renderExitMarkers(layers.exitMarkerLayer, findExitsAtTransitions([shortest?.edges ?? [], shaded?.edges ?? []]));
 
     // Every (re)computation - including a same-endpoints recompute triggered by a date/time
-    // change via recomputeShadows() - starts the floor badge fresh at 地上/undimmed rather
-    // than carrying over whatever floor was selected on a previous route.
-    showFloorToggle(distinctRouteLayers(routeEdges), [...shortestSegments, ...shadedSegments], exitMarkers);
+    // change via recomputeShadows() - starts the toggle fresh at 地上 rather than carrying
+    // over whatever mode was selected on a previous route.
+    showFloorToggle([...shortestSegments, ...shadedSegments]);
 
     const exitLines = formatNearestExitLine('出発地', startInfo) + formatNearestExitLine('目的地', endInfo);
 
@@ -860,10 +758,10 @@ export function startApp(
     // without this the tap would also bubble up as a map-click and get misread as a
     // start/end point selection.
     e.stopPropagation();
-    if (floorCycle.length === 0) return;
-    selectedFloorIndex = (selectedFloorIndex + 1) % floorCycle.length;
+    if (!undergroundToggleVisible) return;
+    undergroundSelected = !undergroundSelected;
     updateFloorToggleLabel();
-    applyFloorDisplay();
+    applyUndergroundDisplay();
   });
 
   // ---- wire up events ----
